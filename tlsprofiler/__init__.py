@@ -253,5 +253,5 @@ class TLSProfiler:
 
 if __name__ == "__main__":
     ca_file = "/home/fabian/Documents/docker/tls/certificates/ca_cert.pem"
-    profiler = TLSProfiler('old.dev.intranet', 'intermediate', ca_file)
+    profiler = TLSProfiler('old.dev.intranet', 'old', ca_file)
     print(profiler.run())
