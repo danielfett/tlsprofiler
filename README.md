@@ -1,5 +1,10 @@
 # TLS Profiler #
 
+## Dependencies
+- [Nassl fork](https://github.com/fabian-hk/nassl/tree/tls_profiler)
+(You can download a prebuilt wheel from [here](https://drive.google.com/open?id=10MCanCfoaBiT5GJ0Ckg8aExAfigrpvud))
+
+## Description
 The `TLSProfiler` class provided in this library can be used to
 compare the configuration of a TLS server to the [Mozilla TLS
 configuration
