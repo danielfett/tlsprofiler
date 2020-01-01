@@ -1,4 +1,3 @@
-from nassl.temp_key_info import DHTempKeyInfo, NistECDHTempKeyInfo, ECDHTempKeyInfo, TempKeyInfo
 from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
 from sslyze.plugins.openssl_cipher_suites_plugin import *
 from sslyze.plugins.certificate_info_plugin import CertificateInfoScanCommand, CertificateInfoScanResult
@@ -26,7 +25,7 @@ class TLSProfilerResult:
         self.all_ok = self.validated and self.profile_matched and not self.vulnerable
 
     def __str__(self):
-        return f"Validation Errors: {self.validation_errors}\n\nProfile Errors: {self.profile_errors}\n\n" \
+        return f"Certificate Errors: {self.validation_errors}\n\nProfile Errors: {self.profile_errors}\n\n" \
                f"Vulnerability Errors: {self.vulnerability_errors}\n\nValidated: {self.validated}\n\n" \
                f"Profile Matched: {self.profile_matched}\n\nVulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
 
@@ -70,13 +69,13 @@ class TLSProfiler:
         if self.server_info is None:
             return
 
-        certificate_validation_errors = self.check_certificate()
+        certificate_error = self.check_certificate()
         self.scan_supported_ciphers_and_protocols()
         profile_errors = self.check_server_matches_profile()
         vulnerability_errors = self.check_vulnerabilities()
 
         return TLSProfilerResult(
-            certificate_validation_errors,
+            certificate_error,
             profile_errors,
             vulnerability_errors,
         )
@@ -120,22 +119,18 @@ class TLSProfiler:
         for cipher in illegal_ciphers:
             errors.append(f'must not support "{cipher}"')
 
-        # match DHE and ECDHE parameters
-        for (key_info, cipher) in self.supported_key_exchange:
-            if isinstance(key_info, DHTempKeyInfo) and key_info.key_size != self.target_profile['dh_param_size']:
-                errors.append(f"wrong DHE parameter size {key_info.key_size} for cipher {cipher}"
-                              f", should be {self.target_profile['dh_param_size']}")
-            elif isinstance(key_info, (NistECDHTempKeyInfo, ECDHTempKeyInfo)) \
-                    and key_info.key_size != self.target_profile['ecdh_param_size']:
-                errors.append(f"wrong ECDHE parameter size {key_info.key_size} for cipher {cipher}"
-                              f", should be {self.target_profile['ecdh_param_size']}")
-
         return errors
 
     def check_certificate(self):
         result = self.scan(CertificateInfoScanCommand)  # type: CertificateInfoScanResult
 
         errors = []
+
+        # check certificate lifespan
+        certificate = result.received_certificate_chain[0]
+        lifespan = certificate.not_valid_after - certificate.not_valid_before
+        if self.target_profile["maximum_certificate_lifespan"] < lifespan.days:
+            errors.append(f"certificate lifespan to long")
 
         for r in result.path_validation_result_list:
             if not r.was_validation_successful:
@@ -195,5 +190,5 @@ class TLSProfiler:
 
 
 if __name__ == "__main__":
-    profiler = TLSProfiler('localhost', 'intermediate')
+    profiler = TLSProfiler('localhost', 'old')
     print(profiler.run())
