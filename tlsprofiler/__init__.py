@@ -133,6 +133,9 @@ class TLSProfiler:
         return self._check_cipher_order_rec(allowed_ciphers, supported_ciphers)
 
     def _check_cipher_order(self, allowed_ciphers: List[str], supported_ciphers: List[str]) -> bool:
+        if not allowed_ciphers and not allowed_ciphers:
+            return True
+
         a_iter = iter(allowed_ciphers)
         s_iter = iter(supported_ciphers)
         return self._check_cipher_order_rec(a_iter, s_iter)
@@ -153,10 +156,12 @@ class TLSProfiler:
 
         # match supported cipher suites and the order
         for protocol, supported_ciphers in self.supported_ciphers.items():
-            if protocol == "TLSv1.3":
+            if protocol == "TLSv1.3" and protocol in allowed_protocols:
                 allowed_ciphers = self.target_profile['openssl_ciphersuites']
-            else:
+            elif protocol in allowed_protocols:
                 allowed_ciphers = self.target_profile['openssl_ciphers']
+            else:
+                allowed_ciphers = []
 
             # find cipher suites that should not be supported
             illegal_ciphers = set(supported_ciphers) - set(allowed_ciphers)
@@ -253,5 +258,5 @@ class TLSProfiler:
 
 if __name__ == "__main__":
     # ca_file = "/home/fabian/Documents/docker/tls/certificates/ca_cert.pem"
-    profiler = TLSProfiler('google.com', 'old')
+    profiler = TLSProfiler('localhost', 'old')
     print(profiler.run())
