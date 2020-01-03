@@ -1,4 +1,9 @@
-from nassl.key_exchange_info import DhKeyExchangeInfo, NistEcDhKeyExchangeInfo, EcDhKeyExchangeInfo, KeyExchangeInfo
+from typing import Tuple
+from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
+import requests
+import logging
+
+from nassl.key_exchange_info import DhKeyExchangeInfo
 from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
 from sslyze.plugins.openssl_cipher_suites_plugin import *
 from sslyze.plugins.certificate_info_plugin import CertificateInfoScanCommand, CertificateInfoScanResult
@@ -7,8 +12,6 @@ from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand, R
 from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand, HeartbleedScanResult
 from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand, OpenSslCcsInjectionScanResult
 
-import requests
-import logging
 
 log = logging.getLogger('tlsprofiler')
 
@@ -32,7 +35,7 @@ class TLSProfilerResult:
 
 
 class TLSProfiler:
-    PROFILES_URL = 'https://statics.tls.security.mozilla.org/server-side-tls-conf-5.0.json'
+    PROFILES_URL = 'https://ssl-config.mozilla.org/guidelines/5.3.json'
     PROFILES = None
 
     SCAN_COMMANDS = {
@@ -77,9 +80,9 @@ class TLSProfiler:
         if self.server_info is None:
             return
 
-        certificate_validation_errors = self.check_certificate()
+        pub_key_type, certificate_validation_errors = self.check_certificate()
         self.scan_supported_ciphers_and_protocols()
-        profile_errors = self.check_server_matches_profile()
+        profile_errors = self.check_server_matches_profile(pub_key_type)
         vulnerability_errors = self.check_vulnerabilities()
 
         return TLSProfilerResult(
@@ -106,10 +109,7 @@ class TLSProfiler:
                             if cipher.dh_info]
             supported_key_exchange.extend(key_exchange)
             supported_curves.extend(result.supported_curves)
-            if ciphers:
-                server_preferred_order[name] = result.server_cipher_preference
-            else:
-                server_preferred_order[name] = True
+            server_preferred_order[name] = result.server_cipher_preference
             if len(ciphers):
                 supported_protocols.append(name)
 
@@ -140,7 +140,24 @@ class TLSProfiler:
         s_iter = iter(supported_ciphers)
         return self._check_cipher_order_rec(a_iter, s_iter)
 
-    def check_server_matches_profile(self):
+    def _check_pub_key_supports_cipher(self, cipher: str, pub_key_type: str) -> bool:
+        """
+        Checks if cipher suite works with the servers certificate (for TLS 1.2 and older).
+        Source: https://tools.ietf.org/html/rfc5246#appendix-C
+        :param cipher:
+        :param pub_key_type:
+        :return:
+        """
+        if pub_key_type == "RSA" and "ECDSA" in cipher:
+            return False
+        elif pub_key_type == "ECDSA" and "RSA" in cipher:
+            return False
+        elif "DSS" in cipher:
+            return False
+
+        return True
+
+    def check_server_matches_profile(self, pub_key_type: str):
         errors = []
 
         # match supported TLS versions
@@ -149,32 +166,43 @@ class TLSProfiler:
         missing_protocols = allowed_protocols - self.supported_protocols
 
         for protocol in illegal_protocols:
-            errors.append(f'must not support "{protocol}"')
+            errors.append(f'must not support {protocol}')
 
         for protocol in missing_protocols:
-            errors.append(f'must support "{protocol}"')
+            errors.append(f'must support {protocol}')
 
-        # match supported cipher suites and the order
+        # match supported cipher suites and the order for each supported protocol
         for protocol, supported_ciphers in self.supported_ciphers.items():
-            if protocol == "TLSv1.3" and protocol in allowed_protocols:
-                allowed_ciphers = self.target_profile['openssl_ciphersuites']
-            elif protocol in allowed_protocols:
-                allowed_ciphers = self.target_profile['openssl_ciphers']
+            if protocol not in self.supported_protocols:
+                continue
+
+            if protocol == "TLSv1.3":
+                allowed_ciphers = self.target_profile['ciphersuites']
             else:
-                allowed_ciphers = []
+                allowed_ciphers = self.target_profile['ciphers']['openssl']
 
             # find cipher suites that should not be supported
             illegal_ciphers = set(supported_ciphers) - set(allowed_ciphers)
             for cipher in illegal_ciphers:
-                errors.append(f'must not support "{cipher}"')
+                errors.append(f'must not support {cipher} for protocol {protocol}')
+
+            # find missing cipher suites
+            missing_ciphers = set(allowed_ciphers) - set(supported_ciphers)
+            for cipher in missing_ciphers:
+                if self._check_pub_key_supports_cipher(cipher, pub_key_type):
+                    errors.append(f'should support {cipher} for protocol {protocol}')
 
             if protocol != "TLSv1.3":
                 # check if the server chooses the cipher suite
-                if self.target_profile["server_preferred_order"] and not self.server_preferred_order[protocol]:
+                if self.target_profile['server_preferred_order'] and not self.server_preferred_order[protocol]:
                     errors.append(f"server must choose the cipher suite, not the client (Protocol {protocol})")
 
+                # check if the client chooses the cipher suite
+                if not self.target_profile['server_preferred_order'] and self.server_preferred_order[protocol]:
+                    errors.append(f"client must choose the cipher suite, not the server (Protocol {protocol})")
+
                 # check whether the servers preferred cipher suite preference is correct
-                if self.target_profile["server_preferred_order"] and \
+                if self.target_profile["server_preferred_order"] and self.server_preferred_order[protocol] and \
                         not self._check_cipher_order(allowed_ciphers, supported_ciphers):
                     errors.append(f"server has the wrong cipher suites order (Protocol {protocol})")
 
@@ -185,17 +213,33 @@ class TLSProfiler:
                               f", should be {self.target_profile['dh_param_size']}")
 
         # match ECDH curves used for key exchange
-        # The extra item "prime256v1" is needed because the curve is specified as "secp256r1" in the
-        # intermediate and old profile. I opend an issue for this (https://github.com/mozilla/server-side-tls/issues/265)
-        allowed_curves = set(self.target_profile["tls_curves"] + ["prime256v1"])
+        allowed_curves = self.target_profile["tls_curves"]
         for curve in self.supported_curves:
             if curve not in allowed_curves:
                 errors.append(f"must not support ECDH curve {curve} for key exchange")
 
         return errors
 
-    def check_certificate(self):
+    def _cert_type_string(self, pub_key) -> str:
+        if isinstance(pub_key, rsa.RSAPublicKey):
+            return "RSA"
+        elif isinstance(pub_key, ec.EllipticCurvePublicKey):
+            return "ECDSA"
+        elif isinstance(pub_key, ed25519.Ed25519PublicKey):
+            return "ED25519"
+        elif isinstance(pub_key, ed448.Ed448PublicKey):
+            return "ED448"
+        elif isinstance(pub_key, dsa.DSAPublicKey):
+            return "DSA"
+
+        return ""
+
+    def check_certificate(self) -> Tuple[str, List[str]]:
         result = self.scan(CertificateInfoScanCommand(ca_file=self.ca_file))  # type: CertificateInfoScanResult
+
+        cert = result.verified_certificate_chain[0]
+        pub_key = cert.public_key()
+        pub_key_type = self._cert_type_string(pub_key)
 
         errors = []
 
@@ -230,7 +274,7 @@ class TLSProfiler:
             for error in errors:
                 log.debug(f"  → {error}")
 
-        return errors
+        return pub_key_type, errors
 
     def check_vulnerabilities(self):
         errors = []
@@ -258,5 +302,5 @@ class TLSProfiler:
 
 if __name__ == "__main__":
     # ca_file = "/home/fabian/Documents/docker/tls/certificates/ca_cert.pem"
-    profiler = TLSProfiler('localhost', 'old')
+    profiler = TLSProfiler('google.com', 'old')
     print(profiler.run())
