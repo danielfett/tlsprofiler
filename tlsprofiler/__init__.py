@@ -12,7 +12,6 @@ from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand, R
 from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand, HeartbleedScanResult
 from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand, OpenSslCcsInjectionScanResult
 
-
 log = logging.getLogger('tlsprofiler')
 
 
@@ -119,7 +118,7 @@ class TLSProfiler:
         self.supported_curves = set(supported_curves)
         self.server_preferred_order = server_preferred_order
 
-    def _check_cipher_order_rec(self, allowed_ciphers: iter, supported_ciphers: iter) -> bool:
+    def _check_cipher_order_recursive(self, allowed_ciphers: iter, supported_ciphers: iter) -> bool:
         a_item = next(allowed_ciphers, None)
         if not a_item:
             return False
@@ -130,7 +129,7 @@ class TLSProfiler:
             a_item = next(allowed_ciphers, None)
             if not a_item:
                 return False
-        return self._check_cipher_order_rec(allowed_ciphers, supported_ciphers)
+        return self._check_cipher_order_recursive(allowed_ciphers, supported_ciphers)
 
     def _check_cipher_order(self, allowed_ciphers: List[str], supported_ciphers: List[str]) -> bool:
         if not allowed_ciphers and not allowed_ciphers:
@@ -138,26 +137,26 @@ class TLSProfiler:
 
         a_iter = iter(allowed_ciphers)
         s_iter = iter(supported_ciphers)
-        return self._check_cipher_order_rec(a_iter, s_iter)
+        return self._check_cipher_order_recursive(a_iter, s_iter)
 
     def _check_pub_key_supports_cipher(self, cipher: str, pub_key_type: str) -> bool:
         """
         Checks if cipher suite works with the servers certificate (for TLS 1.2 and older).
-        Source: https://tools.ietf.org/html/rfc5246#appendix-C
+        Source: https://tools.ietf.org/html/rfc5246#appendix-C, https://tools.ietf.org/html/rfc5246#section-7.4.2
         :param cipher:
         :param pub_key_type:
         :return:
         """
-        if pub_key_type == "RSA" and "ECDSA" in cipher:
+        if pub_key_type == "RSA" and ("ECDSA" in cipher or "DSS" in cipher):
             return False
-        elif pub_key_type == "ECDSA" and "RSA" in cipher:
+        elif pub_key_type == "ECDSA" and ("RSA" in cipher or "DSS" in cipher):
             return False
-        elif "DSS" in cipher:
+        elif pub_key_type == "DSA" and ("RSA" in cipher or "ECDSA" in cipher):
             return False
 
         return True
 
-    def check_server_matches_profile(self, pub_key_type: str):
+    def check_protocols(self) -> List[str]:
         errors = []
 
         # match supported TLS versions
@@ -171,28 +170,19 @@ class TLSProfiler:
         for protocol in missing_protocols:
             errors.append(f'must support {protocol}')
 
-        # match supported cipher suites and the order for each supported protocol
-        for protocol, supported_ciphers in self.supported_ciphers.items():
-            if protocol not in self.supported_protocols:
-                continue
+        return errors
 
-            if protocol == "TLSv1.3":
-                allowed_ciphers = self.target_profile['ciphersuites']
-            else:
+    def check_cipher_suites_and_order(self, pub_key_type: str) -> List[str]:
+        errors = []
+
+        # match supported cipher suite order for each supported protocol
+        all_supported_ciphers = []
+        for protocol, supported_ciphers in self.supported_ciphers.items():
+            all_supported_ciphers.extend(supported_ciphers)
+
+            if protocol != "TLSv1.3" and protocol in self.supported_protocols:
                 allowed_ciphers = self.target_profile['ciphers']['openssl']
 
-            # find cipher suites that should not be supported
-            illegal_ciphers = set(supported_ciphers) - set(allowed_ciphers)
-            for cipher in illegal_ciphers:
-                errors.append(f'must not support {cipher} for protocol {protocol}')
-
-            # find missing cipher suites
-            missing_ciphers = set(allowed_ciphers) - set(supported_ciphers)
-            for cipher in missing_ciphers:
-                if self._check_pub_key_supports_cipher(cipher, pub_key_type):
-                    errors.append(f'should support {cipher} for protocol {protocol}')
-
-            if protocol != "TLSv1.3":
                 # check if the server chooses the cipher suite
                 if self.target_profile['server_preferred_order'] and not self.server_preferred_order[protocol]:
                     errors.append(f"server must choose the cipher suite, not the client (Protocol {protocol})")
@@ -206,9 +196,29 @@ class TLSProfiler:
                         not self._check_cipher_order(allowed_ciphers, supported_ciphers):
                     errors.append(f"server has the wrong cipher suites order (Protocol {protocol})")
 
+        # find cipher suites that should not be supported
+        allowed_ciphers = self.target_profile['ciphersuites'] + self.target_profile['ciphers']['openssl']
+        illegal_ciphers = set(all_supported_ciphers) - set(allowed_ciphers)
+        for cipher in illegal_ciphers:
+            errors.append(f'must not support {cipher}')
+
+        # find missing cipher suites
+        missing_ciphers = set(allowed_ciphers) - set(all_supported_ciphers)
+        for cipher in missing_ciphers:
+            if self._check_pub_key_supports_cipher(cipher, pub_key_type):
+                errors.append(f'must support {cipher}')
+
+        return errors
+
+    def check_ecdh_and_dh(self) -> List[str]:
+        errors = []
+
         # match DHE and ECDHE parameters
         for (key_info, cipher) in self.supported_key_exchange:
-            if isinstance(key_info, DhKeyExchangeInfo) and key_info.key_size != self.target_profile['dh_param_size']:
+            if isinstance(key_info, DhKeyExchangeInfo) and not self.target_profile['dh_param_size']:
+                errors.append(f"must not support finite field DH key exchange")
+                break
+            elif isinstance(key_info, DhKeyExchangeInfo) and key_info.key_size != self.target_profile['dh_param_size']:
                 errors.append(f"wrong DHE parameter size {key_info.key_size} for cipher {cipher}"
                               f", should be {self.target_profile['dh_param_size']}")
 
@@ -217,6 +227,17 @@ class TLSProfiler:
         for curve in self.supported_curves:
             if curve not in allowed_curves:
                 errors.append(f"must not support ECDH curve {curve} for key exchange")
+
+        return errors
+
+    def check_server_matches_profile(self, pub_key_type: str):
+        errors = []
+
+        errors.extend(self.check_protocols())
+
+        errors.extend(self.check_cipher_suites_and_order(pub_key_type))
+
+        errors.extend(self.check_ecdh_and_dh())
 
         return errors
 
@@ -301,6 +322,6 @@ class TLSProfiler:
 
 
 if __name__ == "__main__":
-    # ca_file = "/home/fabian/Documents/docker/tls/certificates/ca_cert.pem"
-    profiler = TLSProfiler('google.com', 'old')
+    ca_file = "../../../docker/tls/certificates/ca_cert.pem"
+    profiler = TLSProfiler('localhost', 'modern', ca_file)
     print(profiler.run())
