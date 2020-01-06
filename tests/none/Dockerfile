@@ -19,3 +19,5 @@ RUN openssl x509 -req -in tls_cert.csr -CA ecdsa_ca_cert.pem -CAkey ecdsa_ca_key
     -CAcreateserial -out tls_cert.pem -days 1000 -sha384
 
 RUN cat dhparams4096.pem >> tls_cert.pem
+
+RUN apt purge -y openssl
