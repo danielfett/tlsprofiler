@@ -322,6 +322,6 @@ class TLSProfiler:
 
 
 if __name__ == "__main__":
-    ca_file = "../../../docker/tls/certificates/ca_cert.pem"
+    ca_file = "../../tlsprofiler_test/tests/certificates/rsa_ca_cert.pem"
     profiler = TLSProfiler('old.dev.intranet', 'old', ca_file)
     print(profiler.run())
