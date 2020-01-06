@@ -142,19 +142,19 @@ class TLSProfiler:
     def _check_pub_key_supports_cipher(self, cipher: str, pub_key_type: str) -> bool:
         """
         Checks if cipher suite works with the servers certificate (for TLS 1.2 and older).
-        Source: https://tools.ietf.org/html/rfc5246#appendix-C, https://tools.ietf.org/html/rfc5246#section-7.4.2
-        :param cipher:
+        Source: https://wiki.mozilla.org/Security/Server_Side_TLS, https://tools.ietf.org/html/rfc5246#appendix-A.5
+        :param cipher: OpenSSL cipher name
         :param pub_key_type:
         :return:
         """
-        if pub_key_type == "RSA" and ("ECDSA" in cipher or "DSS" in cipher):
-            return False
-        elif pub_key_type == "ECDSA" and ("RSA" in cipher or "DSS" in cipher):
-            return False
-        elif pub_key_type == "DSA" and ("RSA" in cipher or "ECDSA" in cipher):
-            return False
+        if "anon" in cipher:
+            return True
+        elif pub_key_type in cipher:
+            return True
+        elif pub_key_type == "RSA" and "ECDSA" not in cipher and "DSS" not in cipher:
+            return True
 
-        return True
+        return False
 
     def check_protocols(self) -> List[str]:
         errors = []
@@ -323,5 +323,5 @@ class TLSProfiler:
 
 if __name__ == "__main__":
     ca_file = "../../../docker/tls/certificates/ca_cert.pem"
-    profiler = TLSProfiler('localhost', 'modern', ca_file)
+    profiler = TLSProfiler('old.dev.intranet', 'old', ca_file)
     print(profiler.run())
