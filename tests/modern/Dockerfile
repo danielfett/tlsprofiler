@@ -16,3 +16,4 @@ RUN openssl req -new -key tls_key.pem -out tls_cert.csr -sha512 \
 RUN openssl x509 -req -in tls_cert.csr -CA ecdsa_ca_cert.pem -CAkey ecdsa_ca_key.pem \
     -CAcreateserial -out tls_cert.pem -days 90 -sha512
 
+RUN apt purge -y openssl
