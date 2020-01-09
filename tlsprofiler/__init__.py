@@ -6,16 +6,25 @@ import logging
 from enum import Enum
 
 from nassl.key_exchange_info import DhKeyExchangeInfo
-from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
+from sslyze.server_connectivity_tester import (
+    ServerConnectivityTester,
+    ServerConnectivityError,
+)
 from sslyze.plugins.openssl_cipher_suites_plugin import *
-from sslyze.plugins.certificate_info_plugin import CertificateInfoScanCommand, CertificateInfoScanResult
-from sslyze.plugins.http_headers_plugin import HttpHeadersScanCommand, HttpHeadersScanResult
+from sslyze.plugins.certificate_info_plugin import (
+    CertificateInfoScanCommand,
+    CertificateInfoScanResult,
+)
+from sslyze.plugins.http_headers_plugin import (
+    HttpHeadersScanCommand,
+    HttpHeadersScanResult,
+)
 from sslyze.synchronous_scanner import SynchronousScanner
 from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand
 from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand
 from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand
 
-log = logging.getLogger('tlsprofiler')
+log = logging.getLogger("tlsprofiler")
 
 _EQUIVALENT_CURVES = [
     ("secp192r1", "prime192v1"),
@@ -30,7 +39,12 @@ class PROFILE(Enum):
 
 
 class TLSProfilerResult:
-    def __init__(self, validation_errors, profile_errors, vulnerability_errors):
+    def __init__(
+        self,
+        validation_errors: List[str],
+        profile_errors: List[str],
+        vulnerability_errors: List[str],
+    ):
         self.validation_errors = validation_errors
         self.profile_errors = profile_errors
         self.vulnerability_errors = vulnerability_errors
@@ -42,13 +56,15 @@ class TLSProfilerResult:
         self.all_ok = self.validated and self.profile_matched and not self.vulnerable
 
     def __str__(self):
-        return f"Validation Errors: {self.validation_errors}\n\nProfile Errors: {self.profile_errors}\n\n" \
-               f"Vulnerability Errors: {self.vulnerability_errors}\n\nValidated: {self.validated}\n\n" \
-               f"Profile Matched: {self.profile_matched}\n\nVulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
+        return (
+            f"Validation Errors: {self.validation_errors}\n\nProfile Errors: {self.profile_errors}\n\n"
+            f"Vulnerability Errors: {self.vulnerability_errors}\n\nValidated: {self.validated}\n\n"
+            f"Profile Matched: {self.profile_matched}\n\nVulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
+        )
 
 
 class TLSProfiler:
-    PROFILES_URL = 'https://ssl-config.mozilla.org/guidelines/5.3.json'
+    PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.3.json"
     PROFILES = None
 
     SCAN_COMMANDS = {
@@ -60,7 +76,9 @@ class TLSProfiler:
         "TLSv1.3": Tlsv13ScanCommand,
     }
 
-    def __init__(self, domain: str, target_profile: PROFILE, ca_file: Optional[str] = None) -> None:
+    def __init__(
+        self, domain: str, target_profile: PROFILE, ca_file: Optional[str] = None
+    ) -> None:
         """
         :param domain:
         :param target_profile: One of [old|intermediate|modern]
@@ -71,24 +89,32 @@ class TLSProfiler:
         if TLSProfiler.PROFILES is None:
             TLSProfiler.PROFILES = requests.get(self.PROFILES_URL).json()
             log.info(
-                f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations.")
+                f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations."
+            )
 
-        self.target_profile = TLSProfiler.PROFILES['configurations'][target_profile.value]
-        self.target_profile["tls_curves"] = self._get_equivalent_curves(self.target_profile["tls_curves"])
+        self.target_profile = TLSProfiler.PROFILES["configurations"][
+            target_profile.value
+        ]
+        self.target_profile["tls_curves"] = self._get_equivalent_curves(
+            self.target_profile["tls_curves"]
+        )
         self.target_profile["certificate_curves"] = self._get_equivalent_curves(
-            self.target_profile["certificate_curves"])
+            self.target_profile["certificate_curves"]
+        )
 
         self.scanner = SynchronousScanner()
         try:
-            server_tester = ServerConnectivityTester(
-                hostname=domain,
+            server_tester = ServerConnectivityTester(hostname=domain,)
+            log.info(
+                f"Testing connectivity with {server_tester.hostname}:{server_tester.port}..."
             )
-            log.info(f'Testing connectivity with {server_tester.hostname}:{server_tester.port}...')
             self.server_info = server_tester.perform()
             self.server_error = None
         except ServerConnectivityError as e:
             # Could not establish an SSL connection to the server
-            log.warning(f'Could not connect to {e.server_info.hostname}: {e.error_message}')
+            log.warning(
+                f"Could not connect to {e.server_info.hostname}: {e.error_message}"
+            )
             self.server_error = e.error_message
             self.server_info = None
 
@@ -135,8 +161,11 @@ class TLSProfiler:
             result = self._scan(command())  # type: CipherSuiteScanResult
             ciphers = [cipher.openssl_name for cipher in result.accepted_cipher_list]
             supported_ciphers[name] = ciphers
-            key_exchange = [(cipher.dh_info, cipher.openssl_name) for cipher in result.accepted_cipher_list
-                            if cipher.dh_info]
+            key_exchange = [
+                (cipher.dh_info, cipher.openssl_name)
+                for cipher in result.accepted_cipher_list
+                if cipher.dh_info
+            ]
             supported_key_exchange.extend(key_exchange)
             supported_curves.extend(result.supported_curves)
             server_preferred_order[name] = result.server_cipher_preference
@@ -145,11 +174,15 @@ class TLSProfiler:
 
         self.supported_ciphers = supported_ciphers
         self.supported_protocols = set(supported_protocols)
-        self.supported_key_exchange = supported_key_exchange  # type: List[(KeyExchangeInfo, str)]
+        self.supported_key_exchange = (
+            supported_key_exchange
+        )  # type: List[(KeyExchangeInfo, str)]
         self.supported_curves = set(supported_curves)
         self.server_preferred_order = server_preferred_order
 
-    def _check_cipher_order_recursive(self, allowed_ciphers: iter, supported_ciphers: iter) -> bool:
+    def _check_cipher_order_recursive(
+        self, allowed_ciphers: iter, supported_ciphers: iter
+    ) -> bool:
         a_item = next(allowed_ciphers, None)
         if not a_item:
             return False
@@ -162,7 +195,9 @@ class TLSProfiler:
                 return False
         return self._check_cipher_order_recursive(allowed_ciphers, supported_ciphers)
 
-    def _check_cipher_order(self, allowed_ciphers: List[str], supported_ciphers: List[str]) -> bool:
+    def _check_cipher_order(
+        self, allowed_ciphers: List[str], supported_ciphers: List[str]
+    ) -> bool:
         if not allowed_ciphers and not allowed_ciphers:
             return True
 
@@ -191,15 +226,15 @@ class TLSProfiler:
         errors = []
 
         # match supported TLS versions
-        allowed_protocols = set(self.target_profile['tls_versions'])
+        allowed_protocols = set(self.target_profile["tls_versions"])
         illegal_protocols = self.supported_protocols - allowed_protocols
         missing_protocols = allowed_protocols - self.supported_protocols
 
         for protocol in illegal_protocols:
-            errors.append(f'must not support {protocol}')
+            errors.append(f"must not support {protocol}")
 
         for protocol in missing_protocols:
-            errors.append(f'must support {protocol}')
+            errors.append(f"must support {protocol}")
 
         return errors
 
@@ -212,32 +247,50 @@ class TLSProfiler:
             all_supported_ciphers.extend(supported_ciphers)
 
             if protocol in self.supported_protocols:
-                allowed_ciphers = self.target_profile['ciphers']['openssl']
+                allowed_ciphers = self.target_profile["ciphers"]["openssl"]
 
                 # check if the server chooses the cipher suite
-                if self.target_profile['server_preferred_order'] and not self.server_preferred_order[protocol]:
-                    errors.append(f"server must choose the cipher suite, not the client (Protocol {protocol})")
+                if (
+                    self.target_profile["server_preferred_order"]
+                    and not self.server_preferred_order[protocol]
+                ):
+                    errors.append(
+                        f"server must choose the cipher suite, not the client (Protocol {protocol})"
+                    )
 
                 # check if the client chooses the cipher suite
-                if not self.target_profile['server_preferred_order'] and self.server_preferred_order[protocol]:
-                    errors.append(f"client must choose the cipher suite, not the server (Protocol {protocol})")
+                if (
+                    not self.target_profile["server_preferred_order"]
+                    and self.server_preferred_order[protocol]
+                ):
+                    errors.append(
+                        f"client must choose the cipher suite, not the server (Protocol {protocol})"
+                    )
 
                 # check whether the servers preferred cipher suite preference is correct
-                if self.target_profile["server_preferred_order"] and self.server_preferred_order[protocol] and \
-                        not self._check_cipher_order(allowed_ciphers, supported_ciphers):
-                    errors.append(f"server has the wrong cipher suites order (Protocol {protocol})")
+                if (
+                    self.target_profile["server_preferred_order"]
+                    and self.server_preferred_order[protocol]
+                    and not self._check_cipher_order(allowed_ciphers, supported_ciphers)
+                ):
+                    errors.append(
+                        f"server has the wrong cipher suites order (Protocol {protocol})"
+                    )
 
         # find cipher suites that should not be supported
-        allowed_ciphers = self.target_profile['ciphersuites'] + self.target_profile['ciphers']['openssl']
+        allowed_ciphers = (
+            self.target_profile["ciphersuites"]
+            + self.target_profile["ciphers"]["openssl"]
+        )
         illegal_ciphers = set(all_supported_ciphers) - set(allowed_ciphers)
         for cipher in illegal_ciphers:
-            errors.append(f'must not support {cipher}')
+            errors.append(f"must not support {cipher}")
 
         # find missing cipher suites
         missing_ciphers = set(allowed_ciphers) - set(all_supported_ciphers)
         for cipher in missing_ciphers:
             if self._check_pub_key_supports_cipher(cipher, pub_key_type):
-                errors.append(f'must support {cipher}')
+                errors.append(f"must support {cipher}")
 
         return errors
 
@@ -246,12 +299,20 @@ class TLSProfiler:
 
         # match DHE and ECDHE parameters
         for (key_info, cipher) in self.supported_key_exchange:
-            if isinstance(key_info, DhKeyExchangeInfo) and not self.target_profile['dh_param_size']:
+            if (
+                isinstance(key_info, DhKeyExchangeInfo)
+                and not self.target_profile["dh_param_size"]
+            ):
                 errors.append(f"must not support finite field DH key exchange")
                 break
-            elif isinstance(key_info, DhKeyExchangeInfo) and key_info.key_size != self.target_profile['dh_param_size']:
-                errors.append(f"wrong DHE parameter size {key_info.key_size} for cipher {cipher}"
-                              f", should be {self.target_profile['dh_param_size']}")
+            elif (
+                isinstance(key_info, DhKeyExchangeInfo)
+                and key_info.key_size != self.target_profile["dh_param_size"]
+            ):
+                errors.append(
+                    f"wrong DHE parameter size {key_info.key_size} for cipher {cipher}"
+                    f", should be {self.target_profile['dh_param_size']}"
+                )
 
         # match ECDH curves used for key exchange
         allowed_curves = self.target_profile["tls_curves"]
@@ -286,7 +347,9 @@ class TLSProfiler:
 
         return ""
 
-    def _check_certificate_properties(self, certificate: Certificate, ocsp_stapling: bool) -> Tuple[List[str], str]:
+    def _check_certificate_properties(
+        self, certificate: Certificate, ocsp_stapling: bool
+    ) -> Tuple[List[str], str]:
         errors = []
 
         # check certificate lifespan
@@ -296,22 +359,29 @@ class TLSProfiler:
 
         # check certificate public key type
         pub_key_type = self._cert_type_string(certificate.public_key())
-        if pub_key_type.lower() not in self.target_profile['certificate_types']:
+        if pub_key_type.lower() not in self.target_profile["certificate_types"]:
             errors.append(f"wrong certificate type ({pub_key_type})")
 
         # check key property
         pub_key = certificate.public_key()
-        if isinstance(pub_key, rsa.RSAPublicKey) \
-                and self.target_profile['rsa_key_size'] \
-                and pub_key.key_size != self.target_profile['rsa_key_size']:
+        if (
+            isinstance(pub_key, rsa.RSAPublicKey)
+            and self.target_profile["rsa_key_size"]
+            and pub_key.key_size != self.target_profile["rsa_key_size"]
+        ):
             errors.append(f"RSA certificate has wrong key size")
-        elif isinstance(pub_key, ec.EllipticCurvePublicKey) \
-                and self.target_profile['certificate_curves'] \
-                and pub_key.curve.name not in self.target_profile['certificate_curves']:
+        elif (
+            isinstance(pub_key, ec.EllipticCurvePublicKey)
+            and self.target_profile["certificate_curves"]
+            and pub_key.curve.name not in self.target_profile["certificate_curves"]
+        ):
             errors.append(f"ECDSA certificate uses wrong curve")
 
         # check certificate signature
-        if certificate.signature_algorithm_oid._name not in self.target_profile['certificate_signatures']:
+        if (
+            certificate.signature_algorithm_oid._name
+            not in self.target_profile["certificate_signatures"]
+        ):
             errors.append(f"certificate has a wrong signature")
 
         # check if ocsp stabling is supported
@@ -321,37 +391,49 @@ class TLSProfiler:
         return errors, pub_key_type
 
     def _check_certificate(self) -> Tuple[List[str], List[str], str]:
-        result = self._scan(CertificateInfoScanCommand())  # type: CertificateInfoScanResult
+        result = self._scan(
+            CertificateInfoScanCommand()
+        )  # type: CertificateInfoScanResult
 
         validation_errors = []
 
         certificate = result.received_certificate_chain[0]
-        profile_errors, pub_key_type = self._check_certificate_properties(certificate, result.ocsp_response_is_trusted)
+        profile_errors, pub_key_type = self._check_certificate_properties(
+            certificate, result.ocsp_response_is_trusted
+        )
 
         for r in result.path_validation_result_list:
             if not r.was_validation_successful:
                 validation_errors.append(
-                    f"validation not successful: {r.verify_string} (trust store {r.trust_store.name})")
+                    f"validation not successful: {r.verify_string} (trust store {r.trust_store.name})"
+                )
 
         if result.path_validation_error_list:
-            validation_errors = (fail.error_message for fail in result.path_validation_error_list)
-            validation_errors.append(f'Validation failed: {", ".join(validation_errors)}')
+            validation_errors = (
+                fail.error_message for fail in result.path_validation_error_list
+            )
+            validation_errors.append(
+                f'Validation failed: {", ".join(validation_errors)}'
+            )
 
         if not result.leaf_certificate_subject_matches_hostname:
-            validation_errors.append(f'Leaf certificate subject does not match hostname!')
+            validation_errors.append(
+                f"Leaf certificate subject does not match hostname!"
+            )
 
         if not result.received_chain_has_valid_order:
-            validation_errors.append(f'Certificate chain has wrong order.')
+            validation_errors.append(f"Certificate chain has wrong order.")
 
         if result.verified_chain_has_sha1_signature:
-            validation_errors.append(f'SHA1 signature found in chain.')
+            validation_errors.append(f"SHA1 signature found in chain.")
 
         if result.verified_chain_has_legacy_symantec_anchor:
-            validation_errors.append(f'Symantec legacy certificate found in chain.')
+            validation_errors.append(f"Symantec legacy certificate found in chain.")
 
         if result.leaf_certificate_signed_certificate_timestamps_count < 2:
             validation_errors.append(
-                f'Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}.')
+                f"Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}."
+            )
 
         if len(validation_errors) == 0:
             log.debug(f"Certificate is ok")
@@ -368,12 +450,16 @@ class TLSProfiler:
         result = self._scan(HeartbleedScanCommand())  # type: HeartbleedScanResult
 
         if result.is_vulnerable_to_heartbleed:
-            errors.append(f'Server is vulnerable to Heartbleed attack')
+            errors.append(f"Server is vulnerable to Heartbleed attack")
 
-        result = self._scan(OpenSslCcsInjectionScanCommand())  # type: OpenSslCcsInjectionScanResult
+        result = self._scan(
+            OpenSslCcsInjectionScanCommand()
+        )  # type: OpenSslCcsInjectionScanResult
 
         if result.is_vulnerable_to_ccs_injection:
-            errors.append(f'Server is vulnerable to OpenSSL CCS Injection (CVE-2014-0224)')
+            errors.append(
+                f"Server is vulnerable to OpenSSL CCS Injection (CVE-2014-0224)"
+            )
 
         result = self._scan(RobotScanCommand())  # type: RobotScanResult
 
@@ -391,8 +477,13 @@ class TLSProfiler:
         errors = []
 
         if result.strict_transport_security_header:
-            if result.strict_transport_security_header.max_age < self.target_profile['hsts_min_age']:
-                errors.append(f"wrong HSTS age {result.strict_transport_security_header.max_age}")
+            if (
+                result.strict_transport_security_header.max_age
+                < self.target_profile["hsts_min_age"]
+            ):
+                errors.append(
+                    f"wrong HSTS age {result.strict_transport_security_header.max_age}"
+                )
         else:
             errors.append(f"HSTS header not set")
 
@@ -401,5 +492,5 @@ class TLSProfiler:
 
 if __name__ == "__main__":
     ca_file = "../../tlsprofiler_test/tests/certificates/rsa_ca_cert.pem"
-    profiler = TLSProfiler('old.dev.intranet', PROFILE.OLD, ca_file)
+    profiler = TLSProfiler("localhost", PROFILE.INTERMEDIATE, ca_file)
     print(profiler.run())
