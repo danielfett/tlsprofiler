@@ -3,6 +3,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, d
 from cryptography.x509.base import Certificate
 import requests
 import logging
+from enum import Enum
 
 from nassl.key_exchange_info import DhKeyExchangeInfo
 from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
@@ -14,8 +15,18 @@ from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand
 from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand
 from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand
 
-
 log = logging.getLogger('tlsprofiler')
+
+_EQUIVALENT_CURVES = [
+    ("secp192r1", "prime192v1"),
+    ("secp256r1", "prime256v1"),
+]
+
+
+class PROFILE(Enum):
+    MODERN = "modern"
+    INTERMEDIATE = "intermediate"
+    OLD = "old"
 
 
 class TLSProfilerResult:
@@ -49,19 +60,23 @@ class TLSProfiler:
         "TLSv1.3": Tlsv13ScanCommand,
     }
 
-    def __init__(self, domain: str, target_profile_name: str, ca_file: Optional[str] = None) -> None:
+    def __init__(self, domain: str, target_profile: PROFILE, ca_file: Optional[str] = None) -> None:
         """
         :param domain:
-        :param target_profile_name: One of [old|intermediate|modern]
+        :param target_profile: One of [old|intermediate|modern]
         :param ca_file: Path to trusted custom root certificates in PEM format.
         """
         self.ca_file = ca_file
 
         if TLSProfiler.PROFILES is None:
             TLSProfiler.PROFILES = requests.get(self.PROFILES_URL).json()
-            log.info(f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations.")
+            log.info(
+                f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations.")
 
-        self.target_profile = TLSProfiler.PROFILES['configurations'][target_profile_name]
+        self.target_profile = TLSProfiler.PROFILES['configurations'][target_profile.value]
+        self.target_profile["tls_curves"] = self._get_equivalent_curves(self.target_profile["tls_curves"])
+        self.target_profile["certificate_curves"] = self._get_equivalent_curves(
+            self.target_profile["certificate_curves"])
 
         self.scanner = SynchronousScanner()
         try:
@@ -77,15 +92,28 @@ class TLSProfiler:
             self.server_error = e.error_message
             self.server_info = None
 
+    def _get_equivalent_curves(self, curves: List[str]) -> Optional[List[str]]:
+        if not curves:
+            return None
+
+        curves_tmp = curves.copy()
+        for curve in curves:
+            for curve_tuple in _EQUIVALENT_CURVES:
+                if curve == curve_tuple[0]:
+                    curves_tmp.append(curve_tuple[1])
+                elif curve == curve_tuple[1]:
+                    curves_tmp.append(curve_tuple[0])
+        return curves_tmp
+
     def run(self) -> TLSProfilerResult:
         if self.server_info is None:
             return
 
-        validation_errors, cert_profile_error, pub_key_type = self.check_certificate()
-        hsts_errors = self.check_hsts_age()
-        self.scan_supported_ciphers_and_protocols()
-        profile_errors = self.check_server_matches_profile(pub_key_type)
-        vulnerability_errors = self.check_vulnerabilities()
+        validation_errors, cert_profile_error, pub_key_type = self._check_certificate()
+        hsts_errors = self._check_hsts_age()
+        self._scan_supported_ciphers_and_protocols()
+        profile_errors = self._check_server_matches_profile(pub_key_type)
+        vulnerability_errors = self._check_vulnerabilities()
 
         return TLSProfilerResult(
             validation_errors,
@@ -93,10 +121,10 @@ class TLSProfiler:
             vulnerability_errors,
         )
 
-    def scan(self, command: PluginScanCommand):
+    def _scan(self, command: PluginScanCommand):
         return self.scanner.run_scan_command(self.server_info, command)
 
-    def scan_supported_ciphers_and_protocols(self):
+    def _scan_supported_ciphers_and_protocols(self):
         supported_ciphers = dict()
         supported_protocols = []
         supported_key_exchange = []
@@ -104,7 +132,7 @@ class TLSProfiler:
         server_preferred_order = dict()
         for name, command in self.SCAN_COMMANDS.items():
             log.debug(f"Testing protocol {name}")
-            result = self.scan(command())  # type: CipherSuiteScanResult
+            result = self._scan(command())  # type: CipherSuiteScanResult
             ciphers = [cipher.openssl_name for cipher in result.accepted_cipher_list]
             supported_ciphers[name] = ciphers
             key_exchange = [(cipher.dh_info, cipher.openssl_name) for cipher in result.accepted_cipher_list
@@ -159,7 +187,7 @@ class TLSProfiler:
 
         return False
 
-    def check_protocols(self) -> List[str]:
+    def _check_protocols(self) -> List[str]:
         errors = []
 
         # match supported TLS versions
@@ -175,7 +203,7 @@ class TLSProfiler:
 
         return errors
 
-    def check_cipher_suites_and_order(self, pub_key_type: str) -> List[str]:
+    def _check_cipher_suites_and_order(self, pub_key_type: str) -> List[str]:
         errors = []
 
         # match supported cipher suite order for each supported protocol
@@ -183,7 +211,7 @@ class TLSProfiler:
         for protocol, supported_ciphers in self.supported_ciphers.items():
             all_supported_ciphers.extend(supported_ciphers)
 
-            if protocol != "TLSv1.3" and protocol in self.supported_protocols:
+            if protocol in self.supported_protocols:
                 allowed_ciphers = self.target_profile['ciphers']['openssl']
 
                 # check if the server chooses the cipher suite
@@ -213,20 +241,7 @@ class TLSProfiler:
 
         return errors
 
-    def check_hsts_age(self) -> List[str]:
-        result = self.scan(HttpHeadersScanCommand())  # type: HttpHeadersScanResult
-
-        errors = []
-
-        if result.strict_transport_security_header:
-            if result.strict_transport_security_header.max_age < self.target_profile['hsts_min_age']:
-                errors.append(f"wrong HSTS age {result.strict_transport_security_header.max_age}")
-        else:
-            errors.append(f"HSTS header not set")
-
-        return errors
-
-    def check_ecdh_and_dh(self) -> List[str]:
+    def _check_ecdh_and_dh(self) -> List[str]:
         errors = []
 
         # match DHE and ECDHE parameters
@@ -246,14 +261,14 @@ class TLSProfiler:
 
         return errors
 
-    def check_server_matches_profile(self, pub_key_type: str):
+    def _check_server_matches_profile(self, pub_key_type: str):
         errors = []
 
-        errors.extend(self.check_protocols())
+        errors.extend(self._check_protocols())
 
-        errors.extend(self.check_cipher_suites_and_order(pub_key_type))
+        errors.extend(self._check_cipher_suites_and_order(pub_key_type))
 
-        errors.extend(self.check_ecdh_and_dh())
+        errors.extend(self._check_ecdh_and_dh())
 
         return errors
 
@@ -271,7 +286,7 @@ class TLSProfiler:
 
         return ""
 
-    def check_certificate_properties(self, certificate: Certificate, ocsp_stapling: bool) -> Tuple[List[str], str]:
+    def _check_certificate_properties(self, certificate: Certificate, ocsp_stapling: bool) -> Tuple[List[str], str]:
         errors = []
 
         # check certificate lifespan
@@ -305,13 +320,13 @@ class TLSProfiler:
 
         return errors, pub_key_type
 
-    def check_certificate(self) -> Tuple[List[str], List[str], str]:
-        result = self.scan(CertificateInfoScanCommand)  # type: CertificateInfoScanResult
+    def _check_certificate(self) -> Tuple[List[str], List[str], str]:
+        result = self._scan(CertificateInfoScanCommand())  # type: CertificateInfoScanResult
 
         validation_errors = []
 
         certificate = result.received_certificate_chain[0]
-        profile_errors, pub_key_type = self.check_certificate_properties(certificate, result.ocsp_response_is_trusted)
+        profile_errors, pub_key_type = self._check_certificate_properties(certificate, result.ocsp_response_is_trusted)
 
         for r in result.path_validation_result_list:
             if not r.was_validation_successful:
@@ -347,21 +362,20 @@ class TLSProfiler:
 
         return validation_errors, profile_errors, pub_key_type
 
-
-    def check_vulnerabilities(self):
+    def _check_vulnerabilities(self):
         errors = []
 
-        result = self.scan(HeartbleedScanCommand())  # type: HeartbleedScanResult
+        result = self._scan(HeartbleedScanCommand())  # type: HeartbleedScanResult
 
         if result.is_vulnerable_to_heartbleed:
             errors.append(f'Server is vulnerable to Heartbleed attack')
 
-        result = self.scan(OpenSslCcsInjectionScanCommand())  # type: OpenSslCcsInjectionScanResult
+        result = self._scan(OpenSslCcsInjectionScanCommand())  # type: OpenSslCcsInjectionScanResult
 
         if result.is_vulnerable_to_ccs_injection:
             errors.append(f'Server is vulnerable to OpenSSL CCS Injection (CVE-2014-0224)')
 
-        result = self.scan(RobotScanCommand())  # type: RobotScanResult
+        result = self._scan(RobotScanCommand())  # type: RobotScanResult
 
         if result.robot_result_enum in [
             RobotScanResultEnum.VULNERABLE_WEAK_ORACLE,
@@ -371,8 +385,21 @@ class TLSProfiler:
 
         return errors
 
+    def _check_hsts_age(self) -> List[str]:
+        result = self._scan(HttpHeadersScanCommand())  # type: HttpHeadersScanResult
+
+        errors = []
+
+        if result.strict_transport_security_header:
+            if result.strict_transport_security_header.max_age < self.target_profile['hsts_min_age']:
+                errors.append(f"wrong HSTS age {result.strict_transport_security_header.max_age}")
+        else:
+            errors.append(f"HSTS header not set")
+
+        return errors
+
 
 if __name__ == "__main__":
     ca_file = "../../tlsprofiler_test/tests/certificates/rsa_ca_cert.pem"
-    profiler = TLSProfiler('old.dev.intranet', 'old', ca_file)
+    profiler = TLSProfiler('old.dev.intranet', PROFILE.OLD, ca_file)
     print(profiler.run())
