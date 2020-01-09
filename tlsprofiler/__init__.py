@@ -7,10 +7,14 @@ from nassl.key_exchange_info import DhKeyExchangeInfo
 from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
 from sslyze.plugins.openssl_cipher_suites_plugin import *
 from sslyze.plugins.certificate_info_plugin import CertificateInfoScanCommand, CertificateInfoScanResult
+from sslyze.plugins.http_headers_plugin import HttpHeadersScanCommand, HttpHeadersScanResult
 from sslyze.synchronous_scanner import SynchronousScanner
-from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand, RobotScanResult
-from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand, HeartbleedScanResult
-from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand, OpenSslCcsInjectionScanResult
+from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand
+from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand
+from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand
+
+import requests
+import logging
 
 log = logging.getLogger('tlsprofiler')
 
@@ -36,7 +40,7 @@ class TLSProfilerResult:
 class TLSProfiler:
     PROFILES_URL = 'https://ssl-config.mozilla.org/guidelines/5.3.json'
     PROFILES = None
-
+    
     SCAN_COMMANDS = {
         "SSLv2": Sslv20ScanCommand,
         "SSLv3": Sslv30ScanCommand,
@@ -56,11 +60,10 @@ class TLSProfiler:
 
         if TLSProfiler.PROFILES is None:
             TLSProfiler.PROFILES = requests.get(self.PROFILES_URL).json()
-            log.info(
-                f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations.")
+            log.info(f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations.")
 
         self.target_profile = TLSProfiler.PROFILES['configurations'][target_profile_name]
-
+            
         self.scanner = SynchronousScanner()
         try:
             server_tester = ServerConnectivityTester(
@@ -80,13 +83,14 @@ class TLSProfiler:
             return
 
         pub_key_type, certificate_validation_errors = self.check_certificate()
+        hsts_errors = self.check_hsts_age()
         self.scan_supported_ciphers_and_protocols()
         profile_errors = self.check_server_matches_profile(pub_key_type)
         vulnerability_errors = self.check_vulnerabilities()
 
         return TLSProfilerResult(
             certificate_validation_errors,
-            profile_errors,
+            profile_errors + hsts_errors,
             vulnerability_errors,
         )
 
@@ -210,6 +214,19 @@ class TLSProfiler:
 
         return errors
 
+    def check_hsts_age(self) -> List[str]:
+        result = self.scan(HttpHeadersScanCommand())  # type: HttpHeadersScanResult
+
+        errors = []
+
+        if result.strict_transport_security_header:
+            if result.strict_transport_security_header.max_age < self.target_profile['hsts_min_age']:
+                errors.append(f"wrong HSTS age {result.strict_transport_security_header.max_age}")
+        else:
+            errors.append(f"HSTS header not set")
+
+        return errors
+
     def check_ecdh_and_dh(self) -> List[str]:
         errors = []
 
@@ -255,8 +272,8 @@ class TLSProfiler:
 
         return ""
 
-    def check_certificate(self) -> Tuple[str, List[str]]:
-        result = self.scan(CertificateInfoScanCommand(ca_file=self.ca_file))  # type: CertificateInfoScanResult
+    def check_certificate(self):
+        result = self.scan(CertificateInfoScanCommand())
 
         cert = result.verified_certificate_chain[0]
         pub_key = cert.public_key()
@@ -285,8 +302,7 @@ class TLSProfiler:
             errors.append(f'Symantec legacy certificate found in chain.')
 
         if result.leaf_certificate_signed_certificate_timestamps_count < 2:
-            errors.append(
-                f'Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}.')
+            errors.append(f'Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}.')
 
         if len(errors) == 0:
             log.debug(f"Certificate is ok")
