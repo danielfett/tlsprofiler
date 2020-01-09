@@ -1,5 +1,6 @@
 from typing import Tuple
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
+from cryptography.x509.base import Certificate
 import requests
 import logging
 
@@ -13,8 +14,6 @@ from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand
 from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand
 from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand
 
-import requests
-import logging
 
 log = logging.getLogger('tlsprofiler')
 
@@ -40,7 +39,7 @@ class TLSProfilerResult:
 class TLSProfiler:
     PROFILES_URL = 'https://ssl-config.mozilla.org/guidelines/5.3.json'
     PROFILES = None
-    
+
     SCAN_COMMANDS = {
         "SSLv2": Sslv20ScanCommand,
         "SSLv3": Sslv30ScanCommand,
@@ -63,7 +62,7 @@ class TLSProfiler:
             log.info(f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations.")
 
         self.target_profile = TLSProfiler.PROFILES['configurations'][target_profile_name]
-            
+
         self.scanner = SynchronousScanner()
         try:
             server_tester = ServerConnectivityTester(
@@ -82,15 +81,15 @@ class TLSProfiler:
         if self.server_info is None:
             return
 
-        pub_key_type, certificate_validation_errors = self.check_certificate()
+        validation_errors, cert_profile_error, pub_key_type = self.check_certificate()
         hsts_errors = self.check_hsts_age()
         self.scan_supported_ciphers_and_protocols()
         profile_errors = self.check_server_matches_profile(pub_key_type)
         vulnerability_errors = self.check_vulnerabilities()
 
         return TLSProfilerResult(
-            certificate_validation_errors,
-            profile_errors + hsts_errors,
+            validation_errors,
+            profile_errors + hsts_errors + cert_profile_error,
             vulnerability_errors,
         )
 
@@ -272,46 +271,82 @@ class TLSProfiler:
 
         return ""
 
-    def check_certificate(self):
-        result = self.scan(CertificateInfoScanCommand())
-
-        cert = result.verified_certificate_chain[0]
-        pub_key = cert.public_key()
-        pub_key_type = self._cert_type_string(pub_key)
-
+    def check_certificate_properties(self, certificate: Certificate, ocsp_stapling: bool) -> Tuple[List[str], str]:
         errors = []
+
+        # check certificate lifespan
+        lifespan = certificate.not_valid_after - certificate.not_valid_before
+        if self.target_profile["maximum_certificate_lifespan"] < lifespan.days:
+            errors.append(f"certificate lifespan to long")
+
+        # check certificate public key type
+        pub_key_type = self._cert_type_string(certificate.public_key())
+        if pub_key_type.lower() not in self.target_profile['certificate_types']:
+            errors.append(f"wrong certificate type ({pub_key_type})")
+
+        # check key property
+        pub_key = certificate.public_key()
+        if isinstance(pub_key, rsa.RSAPublicKey) \
+                and self.target_profile['rsa_key_size'] \
+                and pub_key.key_size != self.target_profile['rsa_key_size']:
+            errors.append(f"RSA certificate has wrong key size")
+        elif isinstance(pub_key, ec.EllipticCurvePublicKey) \
+                and self.target_profile['certificate_curves'] \
+                and pub_key.curve.name not in self.target_profile['certificate_curves']:
+            errors.append(f"ECDSA certificate uses wrong curve")
+
+        # check certificate signature
+        if certificate.signature_algorithm_oid._name not in self.target_profile['certificate_signatures']:
+            errors.append(f"certificate has a wrong signature")
+
+        # check if ocsp stabling is supported
+        if not ocsp_stapling:
+            errors.append(f"OCSP stapling must be supported")
+
+        return errors, pub_key_type
+
+    def check_certificate(self) -> Tuple[List[str], List[str], str]:
+        result = self.scan(CertificateInfoScanCommand)  # type: CertificateInfoScanResult
+
+        validation_errors = []
+
+        certificate = result.received_certificate_chain[0]
+        profile_errors, pub_key_type = self.check_certificate_properties(certificate, result.ocsp_response_is_trusted)
 
         for r in result.path_validation_result_list:
             if not r.was_validation_successful:
-                errors.append(f"validation not successful: {r.verify_string} (trust store {r.trust_store.name})")
+                validation_errors.append(
+                    f"validation not successful: {r.verify_string} (trust store {r.trust_store.name})")
 
         if result.path_validation_error_list:
             validation_errors = (fail.error_message for fail in result.path_validation_error_list)
-            errors.append(f'Validation failed: {", ".join(validation_errors)}')
+            validation_errors.append(f'Validation failed: {", ".join(validation_errors)}')
 
         if not result.leaf_certificate_subject_matches_hostname:
-            errors.append(f'Leaf certificate subject does not match hostname!')
+            validation_errors.append(f'Leaf certificate subject does not match hostname!')
 
         if not result.received_chain_has_valid_order:
-            errors.append(f'Certificate chain has wrong order.')
+            validation_errors.append(f'Certificate chain has wrong order.')
 
         if result.verified_chain_has_sha1_signature:
-            errors.append(f'SHA1 signature found in chain.')
+            validation_errors.append(f'SHA1 signature found in chain.')
 
         if result.verified_chain_has_legacy_symantec_anchor:
-            errors.append(f'Symantec legacy certificate found in chain.')
+            validation_errors.append(f'Symantec legacy certificate found in chain.')
 
         if result.leaf_certificate_signed_certificate_timestamps_count < 2:
-            errors.append(f'Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}.')
+            validation_errors.append(
+                f'Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}.')
 
-        if len(errors) == 0:
+        if len(validation_errors) == 0:
             log.debug(f"Certificate is ok")
         else:
             log.debug(f"Error validating certificate")
-            for error in errors:
+            for error in validation_errors:
                 log.debug(f"  → {error}")
 
-        return pub_key_type, errors
+        return validation_errors, profile_errors, pub_key_type
+
 
     def check_vulnerabilities(self):
         errors = []
