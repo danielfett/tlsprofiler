@@ -385,7 +385,7 @@ class TLSProfiler:
             errors.append(f"certificate has a wrong signature")
 
         # check if ocsp stabling is supported
-        if not ocsp_stapling:
+        if ocsp_stapling != self.target_profile["ocsp_staple"]:
             errors.append(f"OCSP stapling must be supported")
 
         return errors, pub_key_type
@@ -491,6 +491,6 @@ class TLSProfiler:
 
 
 if __name__ == "__main__":
-    ca_file = "../../tlsprofiler_test/tests/certificates/rsa_ca_cert.pem"
-    profiler = TLSProfiler("localhost", PROFILE.INTERMEDIATE, ca_file)
+    ca_file = "tests/certificates/ecdsa_ca_cert.pem"
+    profiler = TLSProfiler("none.dev.intranet", PROFILE.OLD, ca_file)
     print(profiler.run())

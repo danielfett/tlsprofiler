@@ -1,4 +1,4 @@
-FROM httpd:2.4
+FROM httpd:2.4.41
 
 RUN apt update && apt install -y openssl
 
