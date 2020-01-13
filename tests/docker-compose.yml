@@ -1,0 +1,58 @@
+version: '3.6'
+services:
+  modern:
+    build:
+      dockerfile: modern/Dockerfile
+      context: .
+    networks:
+      test-net:
+        aliases:
+          - modern.dev.intranet
+        ipv4_address: 172.18.0.3
+  intermediate:
+    build:
+      dockerfile: intermediate/Dockerfile
+      context: .
+    networks:
+      test-net:
+        aliases:
+          - intermediate.dev.intranet
+        ipv4_address: 172.18.0.4
+  old:
+    build:
+      dockerfile: old/Dockerfile
+      context: .
+    networks:
+      test-net:
+        aliases:
+          - old.dev.intranet
+        ipv4_address: 172.18.0.5
+  none:
+    build:
+      dockerfile: none/Dockerfile
+      context: .
+    networks:
+      test-net:
+        aliases:
+          - none.dev.intranet
+        ipv4_address: 172.18.0.6
+  test_container:
+    build:
+      dockerfile: tests/Dockerfile
+      context: ..
+    networks:
+      test-net:
+        aliases:
+          - test-container.dev.intranet
+        ipv4_address: 172.18.0.2
+    depends_on:
+      - modern
+      - intermediate
+      - old
+      - none
+networks:
+  test-net:
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.18.0.0/24"
