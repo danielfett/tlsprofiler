@@ -27,4 +27,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD python -m unittest tests/profile_tests.py
+CMD python -m unittest tests/profile_tests.py tests/function_tests.py

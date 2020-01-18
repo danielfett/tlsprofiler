@@ -16,7 +16,7 @@ RUN openssl genrsa -out tls_key.pem 2048
 RUN openssl req -new -key tls_key.pem -out tls_cert.csr -sha256 \
     -subj "/C=TE/ST=TEST/L=TEST/O=TEST/CN=intermediate.dev.intranet"
 RUN openssl x509 -req -in tls_cert.csr -CA ecdsa_ca_cert.pem -CAkey ecdsa_ca_key.pem \
-    -CAcreateserial -out tls_cert.pem -days 730 -sha256
+    -CAcreateserial -out tls_cert.pem -days 13 -sha256
 
 RUN cat dhparams2048.pem >> tls_cert.pem
 

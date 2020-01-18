@@ -4,6 +4,7 @@ from cryptography.x509.base import Certificate
 import requests
 import logging
 from enum import Enum
+from datetime import datetime
 
 from nassl.key_exchange_info import DhKeyExchangeInfo
 from sslyze.server_connectivity_tester import (
@@ -24,6 +25,8 @@ from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand
 from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand
 from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand
 
+from tlsprofiler import utils
+
 log = logging.getLogger("tlsprofiler")
 
 _EQUIVALENT_CURVES = [
@@ -42,24 +45,33 @@ class TLSProfilerResult:
     def __init__(
         self,
         validation_errors: List[str],
+        cert_warnings: List[str],
         profile_errors: List[str],
         vulnerability_errors: List[str],
     ):
         self.validation_errors = validation_errors
+        self.cert_warnings = cert_warnings
         self.profile_errors = profile_errors
         self.vulnerability_errors = vulnerability_errors
 
         self.validated = len(self.validation_errors) == 0
+        self.no_warnings = len(self.cert_warnings) == 0
         self.profile_matched = len(self.profile_errors) == 0
         self.vulnerable = len(self.vulnerability_errors) > 0
 
-        self.all_ok = self.validated and self.profile_matched and not self.vulnerable
+        self.all_ok = (
+            self.validated
+            and self.profile_matched
+            and not self.vulnerable
+            and self.no_warnings
+        )
 
     def __str__(self):
         return (
-            f"Validation Errors: {self.validation_errors}\n\nProfile Errors: {self.profile_errors}\n\n"
-            f"Vulnerability Errors: {self.vulnerability_errors}\n\nValidated: {self.validated}\n\n"
-            f"Profile Matched: {self.profile_matched}\n\nVulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
+            f"Validation Errors: {self.validation_errors}\n\nCertificate Warnings: {self.cert_warnings}\n\n"
+            f"Profile Errors: {self.profile_errors}\n\nVulnerability Errors: {self.vulnerability_errors}\n\n"
+            f"Validated: {self.validated}\n\nProfile Matched: {self.profile_matched}\n\n"
+            f"Vulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
         )
 
 
@@ -77,14 +89,20 @@ class TLSProfiler:
     }
 
     def __init__(
-        self, domain: str, target_profile: PROFILE, ca_file: Optional[str] = None
+        self,
+        domain: str,
+        target_profile: PROFILE,
+        ca_file: Optional[str] = None,
+        cert_expire_warning: int = 15,
     ) -> None:
         """
         :param domain:
         :param target_profile: One of [old|intermediate|modern]
-        :param ca_file: Path to trusted custom root certificates in PEM format.
+        :param ca_file: Path to a trusted custom root certificates in PEM format.
+        :param cert_expire_warning: A warning is issued if the certificate expires in less days than specified.
         """
         self.ca_file = ca_file
+        self.cert_expire_warning = cert_expire_warning
 
         if TLSProfiler.PROFILES is None:
             TLSProfiler.PROFILES = requests.get(self.PROFILES_URL).json()
@@ -135,7 +153,12 @@ class TLSProfiler:
         if self.server_info is None:
             return
 
-        validation_errors, cert_profile_error, pub_key_type = self._check_certificate()
+        (
+            validation_errors,
+            cert_profile_error,
+            cert_warnings,
+            pub_key_type,
+        ) = self._check_certificate()
         hsts_errors = self._check_hsts_age()
         self._scan_supported_ciphers_and_protocols()
         profile_errors = self._check_server_matches_profile(pub_key_type)
@@ -143,6 +166,7 @@ class TLSProfiler:
 
         return TLSProfilerResult(
             validation_errors,
+            cert_warnings,
             profile_errors + hsts_errors + cert_profile_error,
             vulnerability_errors,
         )
@@ -179,31 +203,6 @@ class TLSProfiler:
         )  # type: List[(KeyExchangeInfo, str)]
         self.supported_curves = set(supported_curves)
         self.server_preferred_order = server_preferred_order
-
-    def _check_cipher_order_recursive(
-        self, allowed_ciphers: iter, supported_ciphers: iter
-    ) -> bool:
-        a_item = next(allowed_ciphers, None)
-        if not a_item:
-            return False
-        s_item = next(supported_ciphers, None)
-        if not s_item:
-            return True
-        while a_item != s_item:
-            a_item = next(allowed_ciphers, None)
-            if not a_item:
-                return False
-        return self._check_cipher_order_recursive(allowed_ciphers, supported_ciphers)
-
-    def _check_cipher_order(
-        self, allowed_ciphers: List[str], supported_ciphers: List[str]
-    ) -> bool:
-        if not allowed_ciphers and not allowed_ciphers:
-            return True
-
-        a_iter = iter(allowed_ciphers)
-        s_iter = iter(supported_ciphers)
-        return self._check_cipher_order_recursive(a_iter, s_iter)
 
     def _check_pub_key_supports_cipher(self, cipher: str, pub_key_type: str) -> bool:
         """
@@ -271,7 +270,7 @@ class TLSProfiler:
                 if (
                     self.target_profile["server_preferred_order"]
                     and self.server_preferred_order[protocol]
-                    and not self._check_cipher_order(allowed_ciphers, supported_ciphers)
+                    and not utils.check_cipher_order(allowed_ciphers, supported_ciphers)
                 ):
                     errors.append(
                         f"server has the wrong cipher suites order (Protocol {protocol})"
@@ -349,13 +348,19 @@ class TLSProfiler:
 
     def _check_certificate_properties(
         self, certificate: Certificate, ocsp_stapling: bool
-    ) -> Tuple[List[str], str]:
+    ) -> Tuple[List[str], List[str], str]:
         errors = []
+        warnings = []
 
         # check certificate lifespan
         lifespan = certificate.not_valid_after - certificate.not_valid_before
         if self.target_profile["maximum_certificate_lifespan"] < lifespan.days:
             errors.append(f"certificate lifespan to long")
+
+        current_time = datetime.now()
+        days_before_expire = certificate.not_valid_after - current_time
+        if days_before_expire.days < self.cert_expire_warning:
+            warnings.append(f"Certificate expires in {days_before_expire.days} days")
 
         # check certificate public key type
         pub_key_type = self._cert_type_string(certificate.public_key())
@@ -388,17 +393,21 @@ class TLSProfiler:
         if ocsp_stapling != self.target_profile["ocsp_staple"]:
             errors.append(f"OCSP stapling must be supported")
 
-        return errors, pub_key_type
+        return errors, warnings, pub_key_type
 
-    def _check_certificate(self) -> Tuple[List[str], List[str], str]:
+    def _check_certificate(self) -> Tuple[List[str], List[str], List[str], str]:
         result = self._scan(
-            CertificateInfoScanCommand()
+            CertificateInfoScanCommand(ca_file=self.ca_file)
         )  # type: CertificateInfoScanResult
 
         validation_errors = []
 
         certificate = result.received_certificate_chain[0]
-        profile_errors, pub_key_type = self._check_certificate_properties(
+        (
+            profile_errors,
+            cert_warnings,
+            pub_key_type,
+        ) = self._check_certificate_properties(
             certificate, result.ocsp_response_is_trusted
         )
 
@@ -442,7 +451,7 @@ class TLSProfiler:
             for error in validation_errors:
                 log.debug(f"  → {error}")
 
-        return validation_errors, profile_errors, pub_key_type
+        return validation_errors, profile_errors, cert_warnings, pub_key_type
 
     def _check_vulnerabilities(self):
         errors = []
@@ -488,9 +497,3 @@ class TLSProfiler:
             errors.append(f"HSTS header not set")
 
         return errors
-
-
-if __name__ == "__main__":
-    ca_file = "tests/certificates/ecdsa_ca_cert.pem"
-    profiler = TLSProfiler("none.dev.intranet", PROFILE.OLD, ca_file)
-    print(profiler.run())
