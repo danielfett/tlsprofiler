@@ -20,5 +20,8 @@ setup(
     author_email='python@danielfett.de',
     packages=find_packages(exclude=['tests']),
     python_requires='>=3.6',
-    install_requires=['requests', 'sslyze'],
+    install_requires=[
+        'requests',
+        'git+https://github.com/fabian-hk/sslyze.git@tls_profiler',
+    ],
 )

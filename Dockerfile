@@ -14,9 +14,7 @@ RUN pip install requests mypy flake8 pytest twine invoke requests black==19.3b0
 
 RUN invoke build.all
 
-RUN pip wheel . -w wheelhouse/
-
-RUN pip install wheelhouse/nassl-2.2.0-cp37-cp37m-linux_x86_64.whl
+RUN pip install .
 
 WORKDIR /usr/src/tlsprofiler
 
