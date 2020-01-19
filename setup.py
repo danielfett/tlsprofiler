@@ -22,9 +22,6 @@ setup(
     python_requires='>=3.6',
     install_requires=[
         'requests',
-        'sslyze_fork',
-    ],
-    dependency_links=[
-        'git+https://github.com/fabian-hk/sslyze.git@tls_profiler#egg=sslyze_fork',
+        'sslyze @ git+https://github.com/fabian-hk/sslyze.git@tls_profiler#egg=sslyze',
     ],
 )
