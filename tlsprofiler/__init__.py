@@ -3,7 +3,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, d
 from cryptography.x509.base import Certificate
 import requests
 import logging
-from enum import Enum
 from datetime import datetime
 
 from nassl.key_exchange_info import DhKeyExchangeInfo
@@ -35,7 +34,7 @@ _EQUIVALENT_CURVES = [
 ]
 
 
-class PROFILE(Enum):
+class PROFILE:
     MODERN = "modern"
     INTERMEDIATE = "intermediate"
     OLD = "old"
@@ -91,7 +90,7 @@ class TLSProfiler:
     def __init__(
         self,
         domain: str,
-        target_profile: PROFILE,
+        target_profile: str,
         ca_file: Optional[str] = None,
         cert_expire_warning: int = 15,
     ) -> None:
@@ -110,9 +109,7 @@ class TLSProfiler:
                 f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations."
             )
 
-        self.target_profile = TLSProfiler.PROFILES["configurations"][
-            target_profile.value
-        ]
+        self.target_profile = TLSProfiler.PROFILES["configurations"][target_profile]
         self.target_profile["tls_curves"] = self._get_equivalent_curves(
             self.target_profile["tls_curves"]
         )

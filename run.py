@@ -7,11 +7,7 @@ class InvalidProfileName(Exception):
     """Exception that is raised if the specified profile is not one of [old|intermediate|modern]"""
 
 
-profile_mapping = {
-    "old": PROFILE.OLD,
-    "intermediate": PROFILE.INTERMEDIATE,
-    "modern": PROFILE.MODERN,
-}
+valid_profiles = ["old", "intermediate", "modern"]
 
 parser = argparse.ArgumentParser(
     description="Scan the TLS settings of a server and match them with a Mozilla TLS profile.",
@@ -41,9 +37,9 @@ args = parser.parse_args()
 
 domain = args.domain
 
-profile = profile_mapping.get(args.profile, None)
+profile = args.profile
 
-if not profile:
+if profile not in valid_profiles:
     raise InvalidProfileName()
 
 ca_file = args.ca_file
