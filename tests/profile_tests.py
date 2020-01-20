@@ -22,6 +22,7 @@ class ProfileTests(unittest.TestCase):
         )
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
+        self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [
@@ -37,10 +38,11 @@ class ProfileTests(unittest.TestCase):
 
     def test_intermediate_profile(self):
         profiler = TLSProfiler(
-            "intermediate.dev.intranet", PROFILE.INTERMEDIATE, self.RSA_CA_FILE
+            "intermediate.dev.intranet", PROFILE.INTERMEDIATE, self.ECDSA_CA_FILE
         )
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
+        self.assertCountEqual(["Certificate expires in 12 days"], result.cert_warnings)
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [
@@ -58,6 +60,7 @@ class ProfileTests(unittest.TestCase):
         profiler = TLSProfiler("old.dev.intranet", PROFILE.OLD, self.RSA_CA_FILE)
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
+        self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [
@@ -76,6 +79,7 @@ class ProfileTests(unittest.TestCase):
         profiler = TLSProfiler("none.dev.intranet", PROFILE.OLD, self.ECDSA_CA_FILE)
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
+        self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [
@@ -104,6 +108,7 @@ class ProfileTests(unittest.TestCase):
         )
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
+        self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [
@@ -131,6 +136,7 @@ class ProfileTests(unittest.TestCase):
         profiler = TLSProfiler("none.dev.intranet", PROFILE.MODERN, self.ECDSA_CA_FILE)
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
+        self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [
