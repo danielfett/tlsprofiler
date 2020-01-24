@@ -75,7 +75,7 @@ class TLSProfilerResult:
 
 
 class TLSProfiler:
-    PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.3.json"
+    PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.4.json"
     PROFILES = None
 
     SCAN_COMMANDS = {

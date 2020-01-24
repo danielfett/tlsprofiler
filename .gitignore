@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 *.whl
+*.pem
+*.csr
+*.srl
