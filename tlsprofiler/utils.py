@@ -4,9 +4,6 @@ from typing import List
 def check_cipher_order(
     allowed_ciphers: List[str], supported_ciphers: List[str]
 ) -> bool:
-    if not allowed_ciphers and not supported_ciphers:
-        return True
-
     a_iter = iter(allowed_ciphers)
     a_item = next(a_iter, None)
     for sc in supported_ciphers:

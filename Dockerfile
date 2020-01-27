@@ -10,7 +10,7 @@ WORKDIR /usr/src/nassl
 
 RUN git checkout tls_profiler
 
-RUN pip install requests mypy flake8 pytest twine invoke requests black==19.3b0
+RUN pip install invoke requests
 
 RUN invoke build.all
 

@@ -94,6 +94,7 @@ class ProfileTests(unittest.TestCase):
                 "wrong certificate type (ECDSA)",
                 "certificate has a wrong signature",
                 "OCSP stapling must be supported",
+                "ECDSA certificate uses wrong curve",
             ],
             result.profile_errors,
         )
@@ -124,6 +125,7 @@ class ProfileTests(unittest.TestCase):
                 "must not support ECDH curve X448 for key exchange",
                 "certificate lifespan to long",
                 "OCSP stapling must be supported",
+                "ECDSA certificate uses wrong curve",
             ],
             result.profile_errors,
         )

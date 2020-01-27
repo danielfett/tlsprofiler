@@ -90,3 +90,8 @@ the Dockerfile in the root directory of this repository.
 You have to use the following commands:
   * ``docker build -t tlsprofiler .``
   * ``docker run tlsprofiler www.example.com intermediate``
+  
+# Tests
+To run all tests the script ``./tests/run_tests.sh`` from the root
+directory of this repository. You can call it with the argument 
+``--no-cache`` to rebuild the test environment from scratch.
