@@ -352,7 +352,10 @@ class TLSProfiler:
         # check certificate lifespan
         lifespan = certificate.not_valid_after - certificate.not_valid_before
         if self.target_profile["maximum_certificate_lifespan"] < lifespan.days:
-            errors.append(f"certificate lifespan to long")
+            errors.append(
+                f"certificate lifespan too long (is {lifespan.days}, "
+                f"should be less than {self.target_profile['maximum_certificate_lifespan']})"
+            )
 
         current_time = datetime.now()
         days_before_expire = certificate.not_valid_after - current_time
@@ -371,13 +374,19 @@ class TLSProfiler:
             and self.target_profile["rsa_key_size"]
             and pub_key.key_size != self.target_profile["rsa_key_size"]
         ):
-            errors.append(f"RSA certificate has wrong key size")
+            errors.append(
+                f"RSA certificate has wrong key size (is {pub_key.key_size}, "
+                f"should be {self.target_profile['rsa_key_size']})"
+            )
         elif (
             isinstance(pub_key, ec.EllipticCurvePublicKey)
             and self.target_profile["certificate_curves"]
             and pub_key.curve.name not in self.target_profile["certificate_curves"]
         ):
-            errors.append(f"ECDSA certificate uses wrong curve")
+            errors.append(
+                f"ECDSA certificate uses wrong curve "
+                f"(is {pub_key.curve.name}, should be one of {self.target_profile['certificate_curves']})"
+            )
 
         # check certificate signature
         if (
@@ -488,7 +497,8 @@ class TLSProfiler:
                 < self.target_profile["hsts_min_age"]
             ):
                 errors.append(
-                    f"wrong HSTS age {result.strict_transport_security_header.max_age}"
+                    f"wrong HSTS age (is {result.strict_transport_security_header.max_age}, "
+                    f"should be at least {self.target_profile['hsts_min_age']})"
                 )
         else:
             errors.append(f"HSTS header not set")
