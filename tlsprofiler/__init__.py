@@ -4,6 +4,7 @@ from cryptography.x509.base import Certificate
 import requests
 import logging
 from datetime import datetime
+from dataclasses import dataclass
 
 from nassl.key_exchange_info import DhKeyExchangeInfo
 from sslyze.server_connectivity_tester import (
@@ -40,7 +41,21 @@ class PROFILE:
     OLD = "old"
 
 
+@dataclass
 class TLSProfilerResult:
+
+    validation_errors: List[str]
+    cert_warnings: List[str]
+    profile_errors: List[str]
+    vulnerability_errors: List[str]
+
+    validated: bool
+    no_warnings: bool
+    profile_matched: bool
+    vulnerable: bool
+
+    all_ok: bool
+
     def __init__(
         self,
         validation_errors: List[str],
@@ -397,7 +412,10 @@ class TLSProfiler:
 
         # check if ocsp stabling is supported
         if ocsp_stapling != self.target_profile["ocsp_staple"]:
-            errors.append(f"OCSP stapling must be supported")
+            if self.target_profile["ocsp_staple"]:
+                errors.append(f"OCSP stapling must be supported")
+            else:
+                errors.append(f"OCSP stapling should not be supported")
 
         return errors, warnings, pub_key_type
 
