@@ -5,3 +5,4 @@ __pycache__/
 *.pem
 *.csr
 *.srl
+Pipfile*
