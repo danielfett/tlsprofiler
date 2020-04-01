@@ -24,6 +24,7 @@ setup(
         'requests',
         'sslyze @ git+https://github.com/fabian-hk/sslyze.git@tls_profiler#egg=sslyze',
         'cryptography>=2.8',
+        'tabulate',
     ],
     entry_points={
         "console_scripts": ["tlsprofiler=tlsprofiler.cli:main"]

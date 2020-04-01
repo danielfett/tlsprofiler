@@ -48,8 +48,10 @@ def main():
     ca_file = args.ca_file
     cert_expire_warning = args.cert_expire_warning
 
+    print("Initialize scanner")
     profiler = TLSProfiler(domain, profile, ca_file, cert_expire_warning)
 
+    print("Run scan (this may take awhile)")
     result = profiler.run()
     print(result)
 

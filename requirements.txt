@@ -2,3 +2,4 @@
 # -e git+https://github.com/fabian-hk/nassl.git@tls_profiler#egg=nassl
 requests
 cryptography>=2.8
+tabulate

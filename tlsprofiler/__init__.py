@@ -5,6 +5,8 @@ import requests
 import logging
 from datetime import datetime
 from dataclasses import dataclass
+from textwrap import TextWrapper
+from tabulate import tabulate
 
 from nassl.key_exchange_info import DhKeyExchangeInfo
 from sslyze.server_connectivity_tester import (
@@ -81,11 +83,26 @@ class TLSProfilerResult:
         )
 
     def __str__(self):
+        width = 80
+        wrapper = TextWrapper(width=width, replace_whitespace=False)
+
+        tmp_val = [wrapper.fill(el) for el in self.validation_errors] if self.validation_errors else ["All good ;)"]
+        tmp_cert = [wrapper.fill(el) for el in self.cert_warnings] if self.cert_warnings else ["All good ;)"]
+        tmp_prof = [wrapper.fill(el) for el in self.profile_errors] if self.profile_errors else ["All good ;)"]
+        tmp_vul = [wrapper.fill(el) for el in self.vulnerability_errors] if self.vulnerability_errors else ["All good ;)"]
+
+        val = {utils.expand_string("Validation Errors", width): tmp_val}
+        cert = {utils.expand_string("Certification Warnings", width): tmp_cert}
+        prof = {utils.expand_string("Profile Errors", width): tmp_prof}
+        vul = {utils.expand_string("Vulnerability Errors", width): tmp_vul}
+
         return (
-            f"Validation Errors: {self.validation_errors}\n\nCertificate Warnings: {self.cert_warnings}\n\n"
-            f"Profile Errors: {self.profile_errors}\n\nVulnerability Errors: {self.vulnerability_errors}\n\n"
-            f"Validated: {self.validated}\n\nProfile Matched: {self.profile_matched}\n\n"
-            f"Vulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
+            f"\n{tabulate(val, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
+            f"{tabulate(cert, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
+            f"{tabulate(prof, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
+            f"{tabulate(vul, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
+            f"\nValidated: {self.validated}; Profile Matched: {self.profile_matched}; "
+            f"Vulnerable: {self.vulnerable}; All ok: {self.all_ok}\n"
         )
 
 

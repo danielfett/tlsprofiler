@@ -15,3 +15,10 @@ def check_cipher_order(
         a_item = next(a_iter, None)
 
     return True
+
+
+def expand_string(s: str, width: int) -> str:
+    l = width - len(s)
+    for _ in range(l):
+        s += " "
+    return s
