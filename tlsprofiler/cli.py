@@ -11,7 +11,7 @@ def main():
     valid_profiles = ["old", "intermediate", "modern"]
 
     parser = argparse.ArgumentParser(
-        description="Scan the TLS settings of a server and match them with a Mozilla TLS profile.",
+        description="Scans the TLS settings of a server and compares them with a Mozilla TLS profile.",
         epilog="Example usage: python3 run.py www.example.com intermediate",
     )
     parser.add_argument(

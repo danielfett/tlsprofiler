@@ -86,10 +86,26 @@ class TLSProfilerResult:
         width = 80
         wrapper = TextWrapper(width=width, replace_whitespace=False)
 
-        tmp_val = [wrapper.fill(el) for el in self.validation_errors] if self.validation_errors else ["All good ;)"]
-        tmp_cert = [wrapper.fill(el) for el in self.cert_warnings] if self.cert_warnings else ["All good ;)"]
-        tmp_prof = [wrapper.fill(el) for el in self.profile_errors] if self.profile_errors else ["All good ;)"]
-        tmp_vul = [wrapper.fill(el) for el in self.vulnerability_errors] if self.vulnerability_errors else ["All good ;)"]
+        tmp_val = (
+            [wrapper.fill(el) for el in self.validation_errors]
+            if self.validation_errors
+            else ["All good ;)"]
+        )
+        tmp_cert = (
+            [wrapper.fill(el) for el in self.cert_warnings]
+            if self.cert_warnings
+            else ["All good ;)"]
+        )
+        tmp_prof = (
+            [wrapper.fill(el) for el in self.profile_errors]
+            if self.profile_errors
+            else ["All good ;)"]
+        )
+        tmp_vul = (
+            [wrapper.fill(el) for el in self.vulnerability_errors]
+            if self.vulnerability_errors
+            else ["All good ;)"]
+        )
 
         val = {utils.expand_string("Validation Errors", width): tmp_val}
         cert = {utils.expand_string("Certification Warnings", width): tmp_cert}
@@ -397,7 +413,10 @@ class TLSProfiler:
         # check certificate public key type
         pub_key_type = self._cert_type_string(certificate.public_key())
         if pub_key_type.lower() not in self.target_profile["certificate_types"]:
-            errors.append(f"wrong certificate type ({pub_key_type})")
+            errors.append(
+                f"wrong certificate type (is {pub_key_type}), "
+                f"should be one of {self.target_profile['certificate_types']}"
+            )
 
         # check key property
         pub_key = certificate.public_key()
@@ -425,7 +444,10 @@ class TLSProfiler:
             certificate.signature_algorithm_oid._name
             not in self.target_profile["certificate_signatures"]
         ):
-            errors.append(f"certificate has a wrong signature")
+            errors.append(
+                f"certificate has a wrong signature (is {certificate.signature_algorithm_oid._name}), "
+                f"should be one of {self.target_profile['certificate_signatures']}"
+            )
 
         # check if ocsp stabling is supported
         if ocsp_stapling != self.target_profile["ocsp_staple"]:
