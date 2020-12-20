@@ -125,6 +125,7 @@ class TLSProfilerResult:
 class TLSProfiler:
     PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.4.json"
     PROFILES = None
+    SCT_REQUIRED_DATE = datetime(year=2018, month=4, day=1)  # SCTs are required after this date, see https://groups.google.com/a/chromium.org/forum/#!msg/ct-policy/sz_3W_xKBNY/6jq2ghJXBAAJ
 
     SCAN_COMMANDS = {
         "SSLv2": Sslv20ScanCommand,
@@ -502,9 +503,11 @@ class TLSProfiler:
         if result.verified_chain_has_legacy_symantec_anchor:
             validation_errors.append(f"Symantec legacy certificate found in chain.")
 
-        if result.leaf_certificate_signed_certificate_timestamps_count < 2:
+        sct_count = result.leaf_certificate_signed_certificate_timestamps_count
+        if sct_count < 2 and certificate.not_valid_before >= self.SCT_REQUIRED_DATE:
             validation_errors.append(
-                f"Not enought SCTs in certificate, only found {result.leaf_certificate_signed_certificate_timestamps_count}."
+                f"Certificates issued on or after 2018-04-01 need certificate transparency, "
+                f"i.e., two signed SCTs in certificate. Leaf certificate only has {sct_count}."
             )
 
         if len(validation_errors) == 0:
