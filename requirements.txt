@@ -1,5 +1,6 @@
--e git+https://github.com/fabian-hk/sslyze.git@tls_profiler#egg=sslyze
-# -e git+https://github.com/fabian-hk/nassl.git@tls_profiler#egg=nassl
+nassl>=3.1.0
+sslyze>=3.1.0
 requests
 cryptography>=2.8
 tabulate
+dataclasses

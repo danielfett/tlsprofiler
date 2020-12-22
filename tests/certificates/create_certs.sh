@@ -29,7 +29,7 @@ openssl genrsa -out old_key.pem 2048
 openssl req -new -key old_key.pem -out old_cert.csr -sha256 \
   -subj "/C=TE/ST=TEST/L=TEST/O=TEST/CN=old.dev.intranet"
 openssl x509 -req -in old_cert.csr -CA rsa_ca_cert.pem -CAkey rsa_ca_key.pem \
-  -CAcreateserial -out old_cert.pem -days 730 -sha256
+  -CAcreateserial -out old_cert.pem -days 366 -sha256
 
 # Certificate for the none server
 openssl ecparam -out none_key.pem -name secp521r1 -genkey
