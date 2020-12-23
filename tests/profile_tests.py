@@ -60,7 +60,12 @@ class ProfileTests(unittest.TestCase):
         profiler = TLSProfiler("old.dev.intranet", PROFILE.OLD, self.RSA_CA_FILE)
         result = profiler.run()
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
-        self.assertCountEqual([], result.cert_warnings)
+        self.assertCountEqual(
+            [
+                "Certificate lifespan is 366 days but the recommended lifespan is 90 days."
+            ],
+            result.cert_warnings,
+        )
         self.assertFalse(result.validated)
         self.assertCountEqual(
             [

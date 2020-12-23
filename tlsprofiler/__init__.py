@@ -21,7 +21,6 @@ from sslyze.plugins.scan_commands import ScanCommand, ScanCommandType
 from sslyze.plugins.openssl_cipher_suites.implementation import CipherSuitesScanResult
 from sslyze.plugins.elliptic_curves_plugin import (
     SupportedEllipticCurvesScanResult,
-    EllipticCurve,
 )
 from sslyze.plugins.certificate_info.implementation import (
     CertificateInfoScanResult,
@@ -481,6 +480,13 @@ class TLSProfiler:
             errors.append(
                 f"Certificate lifespan too long (is {lifespan.days}, "
                 f"should be less than {self.target_profile['maximum_certificate_lifespan']})"
+            )
+        elif (
+            self.target_profile["recommended_certificate_lifespan"]
+            and self.target_profile["recommended_certificate_lifespan"] < lifespan.days
+        ):
+            warnings.append(
+                f"Certificate lifespan is {lifespan.days} days but the recommended lifespan is {self.target_profile['recommended_certificate_lifespan']} days."
             )
 
         current_time = datetime.now()
