@@ -35,6 +35,12 @@ def main():
         default=15,
         help="A warning is issued if the certificate expires in less days than specified (default 15 days)",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Shows the comparison to all 3 Mozilla profiles",
+    )
 
     args = parser.parse_args()
 
@@ -53,6 +59,10 @@ def main():
 
     print("Run scan (this may take awhile)")
     result = profiler.run()
+
+    # print the result on the console
+    if args.verbose:
+        result.verbose_print = True
     print(result)
 
 
