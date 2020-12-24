@@ -1,11 +1,7 @@
-from typing import List, Optional, Dict
-from dataclasses import dataclass
-from textwrap import TextWrapper
-from tabulate import tabulate
+from typing import List, Optional
 
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
 
-from tlsprofiler.comparator import ProfileDeviations
 
 EQUIVALENT_CURVES = [
     ("secp192r1", "prime192v1"),
@@ -76,96 +72,8 @@ def check_cipher_order(
     return True
 
 
-def expand_string(s: str, width: int) -> str:
+def expand_string(s: str, width: int, char: str = " ") -> str:
     l = width - len(s)
     for _ in range(l):
-        s += " "
+        s += char
     return s
-
-
-@dataclass
-class TLSProfilerResult:
-    validation_errors: List[str]
-    profile_deviations: Dict[str, ProfileDeviations]
-    vulnerability_errors: List[str]
-
-    validated: bool
-    no_warnings: bool
-    profile_matched: bool
-    vulnerable: bool
-
-    all_ok: bool
-
-    def __init__(
-        self,
-        target_profile_name: str,
-        validation_errors: List[str],
-        profile_deviations: Dict[str, ProfileDeviations],
-        vulnerability_errors: List[str],
-    ):
-        self.target_profile_name = target_profile_name
-
-        self.validation_errors = validation_errors
-        self.profile_deviations = profile_deviations
-        self.vulnerability_errors = vulnerability_errors
-
-        self.validated = len(self.validation_errors) == 0
-        self.no_warnings = (
-            len(self.profile_deviations[self.target_profile_name].cert_warnings) == 0
-        )
-        self.profile_matched = (
-            len(self.profile_deviations[self.target_profile_name].profile_errors) == 0
-        )
-        self.vulnerable = len(self.vulnerability_errors) > 0
-
-        self.all_ok = (
-            self.validated
-            and self.profile_matched
-            and not self.vulnerable
-            and self.no_warnings
-        )
-
-        self.verbose_print = False
-
-    @property
-    def profile_errors(self):
-        return self.profile_deviations[self.target_profile_name].profile_errors
-
-    @property
-    def cert_warnings(self):
-        return self.profile_deviations[self.target_profile_name].cert_warnings
-
-    def __str__(self):
-        width = 80
-        wrapper = TextWrapper(width=width, replace_whitespace=False)
-
-        tmp_val = (
-            [wrapper.fill(el) for el in self.validation_errors]
-            if self.validation_errors
-            else ["All good ;)"]
-        )
-
-        tmp_vul = (
-            [wrapper.fill(el) for el in self.vulnerability_errors]
-            if self.vulnerability_errors
-            else ["All good ;)"]
-        )
-
-        val = {expand_string("Validation Errors", width): tmp_val}
-        vul = {expand_string("Vulnerability Errors", width): tmp_vul}
-
-        profile_deviations_str = ""
-        if self.verbose_print:
-            for key, value in self.profile_deviations.items():
-                if key != self.target_profile_name:
-                    profile_deviations_str += f"{value}"
-
-        return (
-            f"{profile_deviations_str}"
-            f"\nResults for the {self.target_profile_name.title()} Profile:\n"
-            f"\n{tabulate(val, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
-            f"{self.profile_deviations[self.target_profile_name]}"
-            f"{tabulate(vul, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
-            f"\nValidated: {self.validated}; Profile Matched: {self.profile_matched}; "
-            f"Vulnerable: {self.vulnerable}; All ok: {self.all_ok}\n"
-        )

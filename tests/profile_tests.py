@@ -17,10 +17,10 @@ class ProfileTests(unittest.TestCase):
     ]
 
     def test_modern_profile(self):
-        profiler = TLSProfiler(
-            "modern.dev.intranet", PROFILE.MODERN, self.ECDSA_CA_FILE
-        )
-        result = profiler.run()
+        profiler = TLSProfiler("modern.dev.intranet", self.ECDSA_CA_FILE)
+        profiler.scan_server()
+        result = profiler.compare_to_profile(PROFILE.MODERN)
+
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
         self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
@@ -36,10 +36,10 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(result.all_ok)
 
     def test_intermediate_profile(self):
-        profiler = TLSProfiler(
-            "intermediate.dev.intranet", PROFILE.INTERMEDIATE, self.ECDSA_CA_FILE
-        )
-        result = profiler.run()
+        profiler = TLSProfiler("intermediate.dev.intranet", self.ECDSA_CA_FILE)
+        profiler.scan_server()
+        result = profiler.compare_to_profile(PROFILE.INTERMEDIATE)
+
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
         self.assertCountEqual(["Certificate expires in 12 days"], result.cert_warnings)
         self.assertFalse(result.validated)
@@ -57,8 +57,10 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(result.all_ok)
 
     def test_old_profile(self):
-        profiler = TLSProfiler("old.dev.intranet", PROFILE.OLD, self.RSA_CA_FILE)
-        result = profiler.run()
+        profiler = TLSProfiler("old.dev.intranet", self.RSA_CA_FILE)
+        profiler.scan_server()
+        result = profiler.compare_to_profile(PROFILE.OLD)
+
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
         self.assertCountEqual(
             [
@@ -81,8 +83,10 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(result.all_ok)
 
     def test_none_server_old_profile(self):
-        profiler = TLSProfiler("none.dev.intranet", PROFILE.OLD, self.ECDSA_CA_FILE)
-        result = profiler.run()
+        profiler = TLSProfiler("none.dev.intranet", self.ECDSA_CA_FILE)
+        profiler.scan_server()
+        result = profiler.compare_to_profile(PROFILE.OLD)
+
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
         self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
@@ -109,10 +113,10 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(result.all_ok)
 
     def test_none_server_intermediate_profile(self):
-        profiler = TLSProfiler(
-            "none.dev.intranet", PROFILE.INTERMEDIATE, self.ECDSA_CA_FILE
-        )
-        result = profiler.run()
+        profiler = TLSProfiler("none.dev.intranet", self.ECDSA_CA_FILE)
+        profiler.scan_server()
+        result = profiler.compare_to_profile(PROFILE.INTERMEDIATE)
+
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
         self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)
@@ -139,8 +143,10 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(result.all_ok)
 
     def test_none_server_modern_profile(self):
-        profiler = TLSProfiler("none.dev.intranet", PROFILE.MODERN, self.ECDSA_CA_FILE)
-        result = profiler.run()
+        profiler = TLSProfiler("none.dev.intranet", self.ECDSA_CA_FILE)
+        profiler.scan_server()
+        result = profiler.compare_to_profile(PROFILE.MODERN)
+
         self.assertCountEqual(self.VALIDATION_ERRORS, result.validation_errors)
         self.assertCountEqual([], result.cert_warnings)
         self.assertFalse(result.validated)

@@ -1,13 +1,9 @@
 from typing import Tuple, List, Optional, Dict, Set
 from pathlib import Path
-import requests
 import logging
 from datetime import datetime
 
-from cryptography.hazmat.primitives.asymmetric import rsa, ec
-from cryptography.x509 import Certificate
-
-from nassl.ephemeral_key_info import EphemeralKeyInfo, OpenSslEvpPkeyEnum
+from nassl.ephemeral_key_info import EphemeralKeyInfo
 
 from sslyze.server_connectivity import ServerConnectivityTester
 from sslyze.server_setting import ServerNetworkLocationViaDirectConnection
@@ -37,7 +33,7 @@ from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanR
 from sslyze.plugins.robot.implementation import RobotScanResultEnum, RobotScanResult
 
 from tlsprofiler import utils
-from tlsprofiler.utils import TLSProfilerResult
+from tlsprofiler.tlsprofiler_result import TLSProfilerResult
 from tlsprofiler.comparator import Comparator
 
 log = logging.getLogger("tlsprofiler")
@@ -50,12 +46,11 @@ class PROFILE:
 
 
 class TLSProfiler:
-
-    SCT_REQUIRED_DATE = datetime(
+    _SCT_REQUIRED_DATE = datetime(
         year=2018, month=4, day=1
     )  # SCTs are required after this date, see https://groups.google.com/a/chromium.org/forum/#!msg/ct-policy/sz_3W_xKBNY/6jq2ghJXBAAJ
 
-    SSL_SCAN_COMMANDS = {
+    _SSL_SCAN_COMMANDS = {
         "SSLv2": ScanCommand.SSL_2_0_CIPHER_SUITES,
         "SSLv3": ScanCommand.SSL_3_0_CIPHER_SUITES,
         "TLSv1": ScanCommand.TLS_1_0_CIPHER_SUITES,
@@ -64,7 +59,7 @@ class TLSProfiler:
         "TLSv1.3": ScanCommand.TLS_1_3_CIPHER_SUITES,
     }
 
-    ALL_SCAN_COMMANDS = {
+    _ALL_SCAN_COMMANDS = {
         ScanCommand.SSL_2_0_CIPHER_SUITES,
         ScanCommand.SSL_3_0_CIPHER_SUITES,
         ScanCommand.TLS_1_0_CIPHER_SUITES,
@@ -82,102 +77,120 @@ class TLSProfiler:
     def __init__(
         self,
         domain: str,
-        target_profile_name: str,
         ca_file: Optional[str] = None,
         cert_expire_warning: int = 15,
     ) -> None:
         """
-        :param domain:
-        :param target_profile: One of [old|intermediate|modern]
+        :param domain: the domain name of the target server
         :param ca_file: Path to a trusted custom root certificates in PEM format.
         :param cert_expire_warning: A warning is issued if the certificate expires in less days than specified.
         """
-        self.target_profile_name = target_profile_name
+        self._comparator = None
+        self._validation_errors = None
+        self._vulnerability_errors = None
+        self._server_scan_result = None
 
-        self.scan_commands_extra_args = {}
+        self._scan_commands_extra_args = {}
         if ca_file:
             ca_path = Path(ca_file)
-            self.scan_commands_extra_args[
+            self._scan_commands_extra_args[
                 ScanCommand.CERTIFICATE_INFO
             ] = CertificateInfoExtraArguments(ca_path)
 
-        self.cert_expire_warning = cert_expire_warning
+        self._cert_expire_warning = cert_expire_warning
 
         server_location = (
             ServerNetworkLocationViaDirectConnection.with_ip_address_lookup(domain, 443)
         )
-        self.scanner = Scanner()
+        self._scanner = Scanner()
         try:
             log.info(
                 f"Testing connectivity with {server_location.hostname}:{server_location.port}..."
             )
-            self.server_info = ServerConnectivityTester().perform(server_location)
-            self.server_error = None
+            self._server_info = ServerConnectivityTester().perform(server_location)
+            self._server_error = None
         except ConnectionToServerFailed as e:
             # Could not establish an SSL connection to the server
             log.warning(
                 f"Could not connect to {e.server_location.hostname}: {e.error_message}"
             )
-            self.server_error = e.error_message
-            self.server_info = None
+            self._server_error = e.error_message
+            self._server_info = None
 
-    def run(self) -> TLSProfilerResult:
-        if self.server_info is None:
+    def scan_server(self) -> None:
+        """
+        This method scan the server's TLS settings and preprocesses
+        the results to later compare them to a specific profile.
+        """
+        if self._server_info is None:
             return
 
         # run all scans together
         server_scan_req = ServerScanRequest(
-            server_info=self.server_info,
-            scan_commands=self.ALL_SCAN_COMMANDS,
-            scan_commands_extra_arguments=self.scan_commands_extra_args,
+            server_info=self._server_info,
+            scan_commands=self._ALL_SCAN_COMMANDS,
+            scan_commands_extra_arguments=self._scan_commands_extra_args,
         )
-        self.scanner.queue_scan(server_scan_req)
+        self._scanner.queue_scan(server_scan_req)
 
         # We take the first result because only one server was queued
-        self.server_scan_result = next(
-            self.scanner.get_results()
+        self._server_scan_result = next(
+            self._scanner.get_results()
         )  # type: ServerScanResult
 
         # preprocess scan results
-        certificate_obj = self._preprocess_certificate()
         (
             supported_ciphers,
             supported_protocols,
             supported_key_exchange,
             server_preferred_order,
         ) = self._preprocess_ciphers_and_protocols()
-        hsts_header = self._preprocess_hsts_header()
         supported_ecdh_curves = self._preprocess_ecdh_curves()
+        certificate_obj = self._preprocess_certificate()
+        hsts_header = self._preprocess_hsts_header()
 
-        comparator = Comparator(
+        # Initialize the comparator class to compare
+        # the TLS settings to a specific profile later.
+        self._comparator = Comparator(
             supported_ciphers,
             supported_protocols,
             supported_key_exchange,
             supported_ecdh_curves,
             server_preferred_order,
             certificate_obj,
-            self.cert_expire_warning,
+            self._cert_expire_warning,
             hsts_header,
         )
 
-        # Compare the preprocessed scan results to
-        # each Mozilla TLS profile.
-        profile_deviations = {}
-        for profile in ["modern", "intermediate", "old"]:
-            profile_deviations[profile] = comparator.compare(profile)
+        self._validation_errors = self._validate_certificate(certificate_obj)
+        self._vulnerability_errors = self._check_vulnerabilities()
 
-        validation_errors = self._validate_certificate(certificate_obj)
-        vulnerability_errors = self._check_vulnerabilities()
+    def compare_to_profile(self, target_profile_name: str) -> TLSProfilerResult:
+        """
+        Uses the stored scan results from the 'scan_server()' method
+        to compare them to a specific Mozilla TLS profile.
+
+        :param target_profile_name: The target Mozilla TLS profile: one of [old|intermediate|modern].
+        :rtype: TLSProfilerResult
+        """
+        if not self._comparator:
+            return
+
+        # compare the scan results with the target profile
+        profile_errors, certificate_warnings = self._comparator.compare(
+            target_profile_name
+        )
 
         return TLSProfilerResult(
-            self.target_profile_name,
-            validation_errors,
-            profile_deviations,
-            vulnerability_errors,
+            target_profile_name,
+            self._validation_errors,
+            certificate_warnings,
+            profile_errors,
+            self._vulnerability_errors,
         )
 
     def _get_result(self, command: ScanCommandType):
-        return self.server_scan_result.scan_commands_results[command]
+        return self._server_scan_result.scan_commands_results[command]
 
     def _preprocess_ciphers_and_protocols(
         self,
@@ -191,7 +204,7 @@ class TLSProfiler:
         supported_protocols = []
         supported_key_exchange = []
         server_preferred_order = dict()
-        for name, command in self.SSL_SCAN_COMMANDS.items():
+        for name, command in self._SSL_SCAN_COMMANDS.items():
             log.debug(f"Testing protocol {name}")
             result = self._get_result(command)  # type: CipherSuitesScanResult
             ciphers = [
@@ -291,7 +304,7 @@ class TLSProfiler:
             validation_errors.append(f"Symantec legacy certificate found in chain.")
 
         sct_count = certificate_obj.leaf_certificate_signed_certificate_timestamps_count
-        if sct_count < 2 and certificate.not_valid_before >= self.SCT_REQUIRED_DATE:
+        if sct_count < 2 and certificate.not_valid_before >= self._SCT_REQUIRED_DATE:
             validation_errors.append(
                 f"Certificates issued on or after 2018-04-01 need certificate transparency, "
                 f"i.e., two signed SCTs in certificate. Leaf certificate only has {sct_count}."

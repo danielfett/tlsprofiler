@@ -31,8 +31,7 @@ attributes:
   * `validation_errors`: A list of strings describing errors that
     occured while validating the certificate.
   * `certificate_warnings`: A list of strings describing warnings
-  concerning the certificate. Currently, a warning is issued if
-  the certificate expires in less than 15 days.
+  concerning the certificate.
   * `profile_errors`: A list of strings describing deviations from the
     target Mozilla profile.
   * `vulnerability_errors`: Further vulnerabilities (like Heartbleet)
@@ -55,33 +54,33 @@ and [nassl](https://github.com/fabian-hk/nassl/tree/tls_profiler).
 
 ## API usage
 Basic usage of the TLS Profiler:
+
 ```python
 from tlsprofiler import TLSProfiler, PROFILE
 
-profiler = TLSProfiler("www.example.com", PROFILE.MODERN)
-tls_profiler_result = profiler.run()
+profiler = TLSProfiler("www.example.com")
+profiler.scan_server()
+tls_profiler_result = profiler.compare_to_profile(PROFILE.MODERN)
 ```
 
 ## Command-line usage
 Help text for the command-line interface:
 ```shell script
-usage: run.py [-h] [-c CA_FILE] [-w CERT_EXPIRE_WARNING] domain profile
+usage: run.py [-h] [-c CA_FILE] [-w CERT_EXPIRE_WARNING] domain [profile]
 
-Scan the TLS settings of a server and match them with a Mozilla TLS profile.
+Scans the TLS settings of a server and compares them with a Mozilla TLS profile.
 
 positional arguments:
   domain                Domain name of the server to be scanned
-  profile               The Mozilla TLS profile to scan for
-                        [old|intermediate|modern]
+  profile               The Mozilla TLS profile to scan for [old|intermediate|modern]. If no profile is specified, 
+                        the server's TLS settings will be compared to all profiles.
 
 optional arguments:
   -h, --help            show this help message and exit
   -c CA_FILE, --ca-file CA_FILE
-                        Path to a trusted custom root certificates in PEM
-                        format
+                        Path to a trusted custom root certificates in PEM format
   -w CERT_EXPIRE_WARNING, --cert-expire-warning CERT_EXPIRE_WARNING
-                        A warning is issued if the certificate expires in less
-                        days than specified (default 15 days)
+                        A warning is issued if the certificate expires in less days than specified (default 15 days)
 
 Example usage: python3 run.py www.example.com intermediate
 ```

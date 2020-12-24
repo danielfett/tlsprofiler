@@ -1,8 +1,5 @@
 from typing import List, Dict, Set, Tuple
-from dataclasses import dataclass
 from datetime import datetime
-from textwrap import TextWrapper
-from tabulate import tabulate
 import logging
 import requests
 
@@ -21,44 +18,6 @@ from sslyze.plugins.http_headers_plugin import StrictTransportSecurityHeader
 from tlsprofiler import utils
 
 log = logging.getLogger("tlsprofiler")
-
-
-@dataclass
-class ProfileDeviations:
-    profile_name: str
-    profile_errors: List[str]
-    cert_warnings: List[str]
-
-    def __init__(
-        self, profile_name: str, profile_errors: List[str], cert_warnings: List[str]
-    ):
-        self.profile_name = profile_name
-        self.profile_errors = profile_errors
-        self.cert_warnings = cert_warnings
-
-    def __str__(self):
-        width = 80
-        wrapper = TextWrapper(width=width, replace_whitespace=False)
-
-        tmp_cert = (
-            [wrapper.fill(el) for el in self.cert_warnings]
-            if self.cert_warnings
-            else ["All good ;)"]
-        )
-        tmp_prof = (
-            [wrapper.fill(el) for el in self.profile_errors]
-            if self.profile_errors
-            else ["All good ;)"]
-        )
-
-        cert = {utils.expand_string("Certification Warnings", width): tmp_cert}
-        prof = {utils.expand_string("Profile Errors", width): tmp_prof}
-
-        return (
-            f"\n{self.profile_name.title()} Profile:\n"
-            f"{tabulate(cert, headers='keys', tablefmt='fancy_grid', showindex='always')}\n"
-            f"{tabulate(prof, headers='keys', tablefmt='fancy_grid', showindex='always')}\n\n"
-        )
 
 
 class Comparator:
@@ -101,7 +60,7 @@ class Comparator:
         )
         return target_profile
 
-    def compare(self, target_profile_name: str) -> ProfileDeviations:
+    def compare(self, target_profile_name: str) -> Tuple[List[str], List[str]]:
         target_profile = self._get_target_profile(target_profile_name)
 
         protocol_errors = self._check_protocols(target_profile)
@@ -112,16 +71,17 @@ class Comparator:
         certificate_errors, certificate_warnings = self._check_certificate_properties(
             target_profile
         )
-        return ProfileDeviations(
-            target_profile_name,
+
+        profile_errors = (
             protocol_errors
             + cipher_errors
             + dh_parameter_errors
             + ecdh_curves_errors
             + hsts_parameter_errors
-            + certificate_errors,
-            certificate_warnings,
+            + certificate_errors
         )
+
+        return profile_errors, certificate_warnings
 
     def _check_protocols(self, target_profile: Dict) -> List[str]:
         errors = []
@@ -250,7 +210,7 @@ class Comparator:
         if self.hsts_header:
             if self.hsts_header.max_age < target_profile["hsts_min_age"]:
                 errors.append(
-                    f"wrong HSTS age (is {self.hsts_header.max_age}, "
+                    f"Wrong HSTS age (is {self.hsts_header.max_age}, "
                     f"should be at least {target_profile['hsts_min_age']})"
                 )
         else:
