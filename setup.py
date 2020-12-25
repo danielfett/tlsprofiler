@@ -11,7 +11,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
 setup(
 
     name='tlsprofiler',
-    version='1.0',
+    version='2.0',
     description="Library to compare a server's TLS configuration to the Mozilla TLS profiles (old, intermediate, modern).",
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -21,10 +21,12 @@ setup(
     packages=find_packages(exclude=['tests']),
     python_requires='>=3.6',
     install_requires=[
+        'nassl>=3.1.0',
+        'sslyze>=3.1.0',
         'requests',
-        'sslyze @ git+https://github.com/fabian-hk/sslyze.git@tls_profiler#egg=sslyze',
         'cryptography>=2.8',
         'tabulate',
+        'dataclasses',
     ],
     entry_points={
         "console_scripts": ["tlsprofiler=tlsprofiler.cli:main"]
