@@ -108,13 +108,13 @@ class TLSProfiler:
                 f"Testing connectivity with {server_location.hostname}:{server_location.port}..."
             )
             self._server_info = ServerConnectivityTester().perform(server_location)
-            self._server_error = None
+            self.server_error = None
         except ConnectionToServerFailed as e:
             # Could not establish an SSL connection to the server
             log.warning(
                 f"Could not connect to {e.server_location.hostname}: {e.error_message}"
             )
-            self._server_error = e.error_message
+            self.server_error = e.error_message
             self._server_info = None
 
     def scan_server(self) -> None:
