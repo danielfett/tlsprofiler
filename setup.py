@@ -21,8 +21,8 @@ setup(
     packages=find_packages(exclude=['tests']),
     python_requires='>=3.6',
     install_requires=[
-        'nassl>=3.1.0',
-        'sslyze>=3.1.0',
+        'nassl>=3.1.0,<4.0.0',
+        'sslyze>=3.1.0,<4.0.0',
         'requests',
         'cryptography>=2.8',
         'tabulate',
