@@ -1,37 +1,42 @@
-from typing import Tuple
-from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
-from cryptography.x509.base import Certificate
-import requests
+from typing import Tuple, List, Optional, Dict, Set
+from pathlib import Path
 import logging
 from datetime import datetime
 
-from nassl.key_exchange_info import DhKeyExchangeInfo
-from sslyze.server_connectivity_tester import (
-    ServerConnectivityTester,
-    ServerConnectivityError,
+from nassl.ephemeral_key_info import EphemeralKeyInfo
+
+from sslyze.server_connectivity import ServerConnectivityTester
+from sslyze.server_setting import ServerNetworkLocationViaDirectConnection
+from sslyze.scanner import Scanner, ServerScanRequest, ServerScanResult
+from sslyze.errors import ConnectionToServerFailed
+
+from sslyze.plugins.scan_commands import ScanCommand, ScanCommandType
+from sslyze.plugins.openssl_cipher_suites.implementation import (
+    CipherSuitesScanResult,
+    CipherSuiteAcceptedByServer,
 )
-from sslyze.plugins.openssl_cipher_suites_plugin import *
-from sslyze.plugins.certificate_info_plugin import (
-    CertificateInfoScanCommand,
+from sslyze.plugins.elliptic_curves_plugin import (
+    SupportedEllipticCurvesScanResult,
+)
+from sslyze.plugins.certificate_info.implementation import (
     CertificateInfoScanResult,
+    CertificateInfoExtraArguments,
+    CertificateDeploymentAnalysisResult,
 )
+from sslyze.plugins.certificate_info._cert_chain_analyzer import PathValidationResult
 from sslyze.plugins.http_headers_plugin import (
-    HttpHeadersScanCommand,
     HttpHeadersScanResult,
+    StrictTransportSecurityHeader,
 )
-from sslyze.synchronous_scanner import SynchronousScanner
-from sslyze.plugins.robot_plugin import RobotScanResultEnum, RobotScanCommand
-from sslyze.plugins.heartbleed_plugin import HeartbleedScanCommand
-from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanCommand
+from sslyze.plugins.heartbleed_plugin import HeartbleedScanResult
+from sslyze.plugins.openssl_ccs_injection_plugin import OpenSslCcsInjectionScanResult
+from sslyze.plugins.robot.implementation import RobotScanResultEnum, RobotScanResult
 
 from tlsprofiler import utils
+from tlsprofiler.tlsprofiler_result import TLSProfilerResult
+from tlsprofiler.comparator import Comparator
 
 log = logging.getLogger("tlsprofiler")
-
-_EQUIVALENT_CURVES = [
-    ("secp192r1", "prime192v1"),
-    ("secp256r1", "prime256v1"),
-]
 
 
 class PROFILE:
@@ -40,414 +45,266 @@ class PROFILE:
     OLD = "old"
 
 
-class TLSProfilerResult:
-    def __init__(
-        self,
-        validation_errors: List[str],
-        cert_warnings: List[str],
-        profile_errors: List[str],
-        vulnerability_errors: List[str],
-    ):
-        self.validation_errors = validation_errors
-        self.cert_warnings = cert_warnings
-        self.profile_errors = profile_errors
-        self.vulnerability_errors = vulnerability_errors
-
-        self.validated = len(self.validation_errors) == 0
-        self.no_warnings = len(self.cert_warnings) == 0
-        self.profile_matched = len(self.profile_errors) == 0
-        self.vulnerable = len(self.vulnerability_errors) > 0
-
-        self.all_ok = (
-            self.validated
-            and self.profile_matched
-            and not self.vulnerable
-            and self.no_warnings
-        )
-
-    def __str__(self):
-        return (
-            f"Validation Errors: {self.validation_errors}\n\nCertificate Warnings: {self.cert_warnings}\n\n"
-            f"Profile Errors: {self.profile_errors}\n\nVulnerability Errors: {self.vulnerability_errors}\n\n"
-            f"Validated: {self.validated}\n\nProfile Matched: {self.profile_matched}\n\n"
-            f"Vulnerable: {self.vulnerable}\n\nAll ok: {self.all_ok}"
-        )
-
-
 class TLSProfiler:
-    PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.4.json"
-    PROFILES = None
-    SCT_REQUIRED_DATE = datetime(year=2018, month=4, day=1)  # SCTs are required after this date, see https://groups.google.com/a/chromium.org/forum/#!msg/ct-policy/sz_3W_xKBNY/6jq2ghJXBAAJ
+    _SCT_REQUIRED_DATE = datetime(
+        year=2018, month=4, day=1
+    )  # SCTs are required after this date, see https://groups.google.com/a/chromium.org/forum/#!msg/ct-policy/sz_3W_xKBNY/6jq2ghJXBAAJ
 
-    SCAN_COMMANDS = {
-        "SSLv2": Sslv20ScanCommand,
-        "SSLv3": Sslv30ScanCommand,
-        "TLSv1": Tlsv10ScanCommand,
-        "TLSv1.1": Tlsv11ScanCommand,
-        "TLSv1.2": Tlsv12ScanCommand,
-        "TLSv1.3": Tlsv13ScanCommand,
+    _SSL_SCAN_COMMANDS = {
+        "SSLv2": ScanCommand.SSL_2_0_CIPHER_SUITES,
+        "SSLv3": ScanCommand.SSL_3_0_CIPHER_SUITES,
+        "TLSv1": ScanCommand.TLS_1_0_CIPHER_SUITES,
+        "TLSv1.1": ScanCommand.TLS_1_1_CIPHER_SUITES,
+        "TLSv1.2": ScanCommand.TLS_1_2_CIPHER_SUITES,
+        "TLSv1.3": ScanCommand.TLS_1_3_CIPHER_SUITES,
+    }
+
+    _ALL_SCAN_COMMANDS = {
+        ScanCommand.SSL_2_0_CIPHER_SUITES,
+        ScanCommand.SSL_3_0_CIPHER_SUITES,
+        ScanCommand.TLS_1_0_CIPHER_SUITES,
+        ScanCommand.TLS_1_1_CIPHER_SUITES,
+        ScanCommand.TLS_1_2_CIPHER_SUITES,
+        ScanCommand.TLS_1_3_CIPHER_SUITES,
+        ScanCommand.ELLIPTIC_CURVES,
+        ScanCommand.HTTP_HEADERS,
+        ScanCommand.CERTIFICATE_INFO,
+        ScanCommand.HEARTBLEED,
+        ScanCommand.ROBOT,
+        ScanCommand.OPENSSL_CCS_INJECTION,
     }
 
     def __init__(
         self,
         domain: str,
-        target_profile: str,
         ca_file: Optional[str] = None,
         cert_expire_warning: int = 15,
     ) -> None:
         """
-        :param domain:
-        :param target_profile: One of [old|intermediate|modern]
+        :param domain: the domain name of the target server
         :param ca_file: Path to a trusted custom root certificates in PEM format.
         :param cert_expire_warning: A warning is issued if the certificate expires in less days than specified.
         """
-        self.ca_file = ca_file
-        self.cert_expire_warning = cert_expire_warning
+        self._comparator = None
+        self._validation_errors = None
+        self._vulnerability_errors = None
+        self._server_scan_result = None
 
-        if TLSProfiler.PROFILES is None:
-            TLSProfiler.PROFILES = requests.get(self.PROFILES_URL).json()
-            log.info(
-                f"Loaded version {TLSProfiler.PROFILES['version']} of the Mozilla TLS configuration recommendations."
-            )
+        self._scan_commands_extra_args = {}
+        if ca_file:
+            ca_path = Path(ca_file)
+            self._scan_commands_extra_args[
+                ScanCommand.CERTIFICATE_INFO
+            ] = CertificateInfoExtraArguments(ca_path)
 
-        self.target_profile = TLSProfiler.PROFILES["configurations"][target_profile]
-        self.target_profile["tls_curves"] = self._get_equivalent_curves(
-            self.target_profile["tls_curves"]
+        self._cert_expire_warning = cert_expire_warning
+
+        server_location = (
+            ServerNetworkLocationViaDirectConnection.with_ip_address_lookup(domain, 443)
         )
-        self.target_profile["certificate_curves"] = self._get_equivalent_curves(
-            self.target_profile["certificate_curves"]
-        )
-
-        self.scanner = SynchronousScanner()
+        self._scanner = Scanner()
         try:
-            server_tester = ServerConnectivityTester(hostname=domain,)
             log.info(
-                f"Testing connectivity with {server_tester.hostname}:{server_tester.port}..."
+                f"Testing connectivity with {server_location.hostname}:{server_location.port}..."
             )
-            self.server_info = server_tester.perform()
+            self._server_info = ServerConnectivityTester().perform(server_location)
             self.server_error = None
-        except ServerConnectivityError as e:
+        except ConnectionToServerFailed as e:
             # Could not establish an SSL connection to the server
             log.warning(
-                f"Could not connect to {e.server_info.hostname}: {e.error_message}"
+                f"Could not connect to {e.server_location.hostname}: {e.error_message}"
             )
             self.server_error = e.error_message
-            self.server_info = None
+            self._server_info = None
 
-    def _get_equivalent_curves(self, curves: List[str]) -> Optional[List[str]]:
-        if not curves:
-            return None
-
-        curves_tmp = curves.copy()
-        for curve in curves:
-            for curve_tuple in _EQUIVALENT_CURVES:
-                if curve == curve_tuple[0]:
-                    curves_tmp.append(curve_tuple[1])
-                elif curve == curve_tuple[1]:
-                    curves_tmp.append(curve_tuple[0])
-        return curves_tmp
-
-    def run(self) -> TLSProfilerResult:
-        if self.server_info is None:
+    def scan_server(self) -> None:
+        """
+        This method scan the server's TLS settings and preprocesses
+        the results to later compare them to a specific profile.
+        """
+        if self._server_info is None:
             return
 
-        (
-            validation_errors,
-            cert_profile_error,
-            cert_warnings,
-            pub_key_type,
-        ) = self._check_certificate()
-        hsts_errors = self._check_hsts_age()
-        self._scan_supported_ciphers_and_protocols()
-        profile_errors = self._check_server_matches_profile(pub_key_type)
-        vulnerability_errors = self._check_vulnerabilities()
+        # run all scans together
+        server_scan_req = ServerScanRequest(
+            server_info=self._server_info,
+            scan_commands=self._ALL_SCAN_COMMANDS,
+            scan_commands_extra_arguments=self._scan_commands_extra_args,
+        )
+        self._scanner.queue_scan(server_scan_req)
 
-        return TLSProfilerResult(
-            validation_errors,
-            cert_warnings,
-            profile_errors + hsts_errors + cert_profile_error,
-            vulnerability_errors,
+        # We take the first result because only one server was queued
+        self._server_scan_result = next(
+            self._scanner.get_results()
+        )  # type: ServerScanResult
+
+        # preprocess scan results
+        (
+            supported_ciphers,
+            supported_protocols,
+            supported_key_exchange,
+            server_preferred_order,
+        ) = self._preprocess_ciphers_and_protocols()
+        supported_ecdh_curves = self._preprocess_ecdh_curves()
+        certificate_obj = self._preprocess_certificate()
+        hsts_header = self._preprocess_hsts_header()
+
+        # Initialize the comparator class to compare
+        # the TLS settings to a specific profile later.
+        self._comparator = Comparator(
+            supported_ciphers,
+            supported_protocols,
+            supported_key_exchange,
+            supported_ecdh_curves,
+            server_preferred_order,
+            certificate_obj,
+            self._cert_expire_warning,
+            hsts_header,
         )
 
-    def _scan(self, command: PluginScanCommand):
-        return self.scanner.run_scan_command(self.server_info, command)
+        self._validation_errors = self._validate_certificate(certificate_obj)
+        self._vulnerability_errors = self._check_vulnerabilities()
 
-    def _scan_supported_ciphers_and_protocols(self):
+    def compare_to_profile(self, target_profile_name: str) -> TLSProfilerResult:
+        """
+        Uses the stored scan results from the 'scan_server()' method
+        to compare them to a specific Mozilla TLS profile.
+
+        :param target_profile_name: The target Mozilla TLS profile: one of [old|intermediate|modern].
+        :rtype: TLSProfilerResult
+        """
+        if not self._comparator:
+            return
+
+        # compare the scan results with the target profile
+        profile_errors, certificate_warnings = self._comparator.compare(
+            target_profile_name
+        )
+
+        return TLSProfilerResult(
+            target_profile_name,
+            self._validation_errors,
+            certificate_warnings,
+            profile_errors,
+            self._vulnerability_errors,
+        )
+
+    def _get_result(self, command: ScanCommandType):
+        return self._server_scan_result.scan_commands_results[command]
+
+    def _preprocess_ciphers_and_protocols(
+        self,
+    ) -> Tuple[
+        Dict[str, List[str]],
+        Set[str],
+        List[Tuple[EphemeralKeyInfo, str]],
+        Dict[str, CipherSuiteAcceptedByServer],
+    ]:
         supported_ciphers = dict()
         supported_protocols = []
         supported_key_exchange = []
-        supported_curves = []
         server_preferred_order = dict()
-        for name, command in self.SCAN_COMMANDS.items():
+        for name, command in self._SSL_SCAN_COMMANDS.items():
             log.debug(f"Testing protocol {name}")
-            result = self._scan(command())  # type: CipherSuiteScanResult
-            ciphers = [cipher.openssl_name for cipher in result.accepted_cipher_list]
+            result = self._get_result(command)  # type: CipherSuitesScanResult
+            ciphers = [
+                cipher.cipher_suite.openssl_name
+                for cipher in result.accepted_cipher_suites
+            ]
             supported_ciphers[name] = ciphers
+            # NOTE: In the newest sslyze version we only get the key
+            # exchange parameters for ephemeral key exchanges.
+            # We do not get any parameters for finite field DH with
+            # static parameters.
             key_exchange = [
-                (cipher.dh_info, cipher.openssl_name)
-                for cipher in result.accepted_cipher_list
-                if cipher.dh_info
+                (cipher.ephemeral_key, cipher.cipher_suite.openssl_name)
+                for cipher in result.accepted_cipher_suites
+                if cipher.ephemeral_key
             ]
             supported_key_exchange.extend(key_exchange)
-            supported_curves.extend(result.supported_curves)
-            server_preferred_order[name] = result.server_cipher_preference
-            if len(ciphers):
+            server_preferred_order[name] = result.cipher_suite_preferred_by_server
+            if result.is_tls_protocol_version_supported:
                 supported_protocols.append(name)
 
-        self.supported_ciphers = supported_ciphers
-        self.supported_protocols = set(supported_protocols)
-        self.supported_key_exchange = (
-            supported_key_exchange
-        )  # type: List[(KeyExchangeInfo, str)]
-        self.supported_curves = set(supported_curves)
-        self.server_preferred_order = server_preferred_order
-
-    def _check_pub_key_supports_cipher(self, cipher: str, pub_key_type: str) -> bool:
-        """
-        Checks if cipher suite works with the servers certificate (for TLS 1.2 and older).
-        Source: https://wiki.mozilla.org/Security/Server_Side_TLS, https://tools.ietf.org/html/rfc5246#appendix-A.5
-        :param cipher: OpenSSL cipher name
-        :param pub_key_type:
-        :return:
-        """
-        if "anon" in cipher:
-            return True
-        elif pub_key_type in cipher:
-            return True
-        elif pub_key_type == "RSA" and "ECDSA" not in cipher and "DSS" not in cipher:
-            return True
-
-        return False
-
-    def _check_protocols(self) -> List[str]:
-        errors = []
-
-        # match supported TLS versions
-        allowed_protocols = set(self.target_profile["tls_versions"])
-        illegal_protocols = self.supported_protocols - allowed_protocols
-        missing_protocols = allowed_protocols - self.supported_protocols
-
-        for protocol in illegal_protocols:
-            errors.append(f"must not support {protocol}")
-
-        for protocol in missing_protocols:
-            errors.append(f"must support {protocol}")
-
-        return errors
-
-    def _check_cipher_suites_and_order(self, pub_key_type: str) -> List[str]:
-        errors = []
-
-        # match supported cipher suite order for each supported protocol
-        all_supported_ciphers = []
-        for protocol, supported_ciphers in self.supported_ciphers.items():
-            all_supported_ciphers.extend(supported_ciphers)
-
-            if protocol in self.supported_protocols:
-                allowed_ciphers = self.target_profile["ciphers"]["openssl"]
-
-                # check if the server chooses the cipher suite
-                if (
-                    self.target_profile["server_preferred_order"]
-                    and not self.server_preferred_order[protocol]
-                ):
-                    errors.append(
-                        f"server must choose the cipher suite, not the client (Protocol {protocol})"
-                    )
-
-                # check if the client chooses the cipher suite
-                if (
-                    not self.target_profile["server_preferred_order"]
-                    and self.server_preferred_order[protocol]
-                ):
-                    errors.append(
-                        f"client must choose the cipher suite, not the server (Protocol {protocol})"
-                    )
-
-                # check whether the servers preferred cipher suite preference is correct
-                if (
-                    self.target_profile["server_preferred_order"]
-                    and self.server_preferred_order[protocol]
-                    and not utils.check_cipher_order(allowed_ciphers, supported_ciphers)
-                ):
-                    errors.append(
-                        f"server has the wrong cipher suites order (Protocol {protocol})"
-                    )
-
-        # find cipher suites that should not be supported
-        allowed_ciphers = (
-            self.target_profile["ciphersuites"]
-            + self.target_profile["ciphers"]["openssl"]
+        return (
+            supported_ciphers,
+            set(supported_protocols),
+            supported_key_exchange,
+            server_preferred_order,
         )
-        illegal_ciphers = set(all_supported_ciphers) - set(allowed_ciphers)
-        for cipher in illegal_ciphers:
-            errors.append(f"must not support {cipher}")
 
-        # find missing cipher suites
-        missing_ciphers = set(allowed_ciphers) - set(all_supported_ciphers)
-        for cipher in missing_ciphers:
-            if self._check_pub_key_supports_cipher(cipher, pub_key_type):
-                errors.append(f"must support {cipher}")
+    def _preprocess_ecdh_curves(self) -> Set[str]:
+        # get all supported curves
+        ecdh_scan_result = self._get_result(
+            ScanCommand.ELLIPTIC_CURVES
+        )  # type: SupportedEllipticCurvesScanResult
+        supported_curves = {}
+        if ecdh_scan_result.supported_curves:
+            supported_curves = [
+                curve.name for curve in ecdh_scan_result.supported_curves
+            ]
+            supported_curves = set(utils.get_equivalent_curves(supported_curves))
 
-        return errors
+        return supported_curves
 
-    def _check_ecdh_and_dh(self) -> List[str]:
-        errors = []
-
-        # match DHE and ECDHE parameters
-        for (key_info, cipher) in self.supported_key_exchange:
-            if (
-                isinstance(key_info, DhKeyExchangeInfo)
-                and not self.target_profile["dh_param_size"]
-            ):
-                errors.append(f"must not support finite field DH key exchange")
-                break
-            elif (
-                isinstance(key_info, DhKeyExchangeInfo)
-                and key_info.key_size != self.target_profile["dh_param_size"]
-            ):
-                errors.append(
-                    f"wrong DHE parameter size {key_info.key_size} for cipher {cipher}"
-                    f", should be {self.target_profile['dh_param_size']}"
-                )
-
-        # match ECDH curves used for key exchange
-        allowed_curves = self.target_profile["tls_curves"]
-        for curve in self.supported_curves:
-            if curve not in allowed_curves:
-                errors.append(f"must not support ECDH curve {curve} for key exchange")
-
-        return errors
-
-    def _check_server_matches_profile(self, pub_key_type: str):
-        errors = []
-
-        errors.extend(self._check_protocols())
-
-        errors.extend(self._check_cipher_suites_and_order(pub_key_type))
-
-        errors.extend(self._check_ecdh_and_dh())
-
-        return errors
-
-    def _cert_type_string(self, pub_key) -> str:
-        if isinstance(pub_key, rsa.RSAPublicKey):
-            return "RSA"
-        elif isinstance(pub_key, ec.EllipticCurvePublicKey):
-            return "ECDSA"
-        elif isinstance(pub_key, ed25519.Ed25519PublicKey):
-            return "ED25519"
-        elif isinstance(pub_key, ed448.Ed448PublicKey):
-            return "ED448"
-        elif isinstance(pub_key, dsa.DSAPublicKey):
-            return "DSA"
-
-        return ""
-
-    def _check_certificate_properties(
-        self, certificate: Certificate, ocsp_stapling: bool
-    ) -> Tuple[List[str], List[str], str]:
-        errors = []
-        warnings = []
-
-        # check certificate lifespan
-        lifespan = certificate.not_valid_after - certificate.not_valid_before
-        if self.target_profile["maximum_certificate_lifespan"] < lifespan.days:
-            errors.append(
-                f"certificate lifespan too long (is {lifespan.days}, "
-                f"should be less than {self.target_profile['maximum_certificate_lifespan']})"
-            )
-
-        current_time = datetime.now()
-        days_before_expire = certificate.not_valid_after - current_time
-        if days_before_expire.days < self.cert_expire_warning:
-            warnings.append(f"Certificate expires in {days_before_expire.days} days")
-
-        # check certificate public key type
-        pub_key_type = self._cert_type_string(certificate.public_key())
-        if pub_key_type.lower() not in self.target_profile["certificate_types"]:
-            errors.append(f"wrong certificate type ({pub_key_type})")
-
-        # check key property
-        pub_key = certificate.public_key()
-        if (
-            isinstance(pub_key, rsa.RSAPublicKey)
-            and self.target_profile["rsa_key_size"]
-            and pub_key.key_size != self.target_profile["rsa_key_size"]
-        ):
-            errors.append(
-                f"RSA certificate has wrong key size (is {pub_key.key_size}, "
-                f"should be {self.target_profile['rsa_key_size']})"
-            )
-        elif (
-            isinstance(pub_key, ec.EllipticCurvePublicKey)
-            and self.target_profile["certificate_curves"]
-            and pub_key.curve.name not in self.target_profile["certificate_curves"]
-        ):
-            errors.append(
-                f"ECDSA certificate uses wrong curve "
-                f"(is {pub_key.curve.name}, should be one of {self.target_profile['certificate_curves']})"
-            )
-
-        # check certificate signature
-        if (
-            certificate.signature_algorithm_oid._name
-            not in self.target_profile["certificate_signatures"]
-        ):
-            errors.append(f"certificate has a wrong signature")
-
-        # check if ocsp stabling is supported
-        if ocsp_stapling != self.target_profile["ocsp_staple"]:
-            errors.append(f"OCSP stapling must be supported")
-
-        return errors, warnings, pub_key_type
-
-    def _check_certificate(self) -> Tuple[List[str], List[str], List[str], str]:
-        result = self._scan(
-            CertificateInfoScanCommand(ca_file=self.ca_file)
+    def _preprocess_certificate(self) -> CertificateDeploymentAnalysisResult:
+        result = self._get_result(
+            ScanCommand.CERTIFICATE_INFO
         )  # type: CertificateInfoScanResult
+
+        # TODO if there are multiple certificates analyze all of them
+        certificate_obj = result.certificate_deployments[0]
+
+        return certificate_obj
+
+    def _preprocess_hsts_header(self) -> StrictTransportSecurityHeader:
+        result = self._get_result(
+            ScanCommand.HTTP_HEADERS
+        )  # type: HttpHeadersScanResult
+
+        return result.strict_transport_security_header
+
+    def _validate_certificate(
+        self, certificate_obj: CertificateDeploymentAnalysisResult
+    ) -> List[str]:
+
+        certificate = certificate_obj.received_certificate_chain[0]
 
         validation_errors = []
 
-        certificate = result.received_certificate_chain[0]
-        (
-            profile_errors,
-            cert_warnings,
-            pub_key_type,
-        ) = self._check_certificate_properties(
-            certificate, result.ocsp_response_is_trusted
-        )
-
-        for r in result.path_validation_result_list:
+        for r in certificate_obj.path_validation_results:  # type: PathValidationResult
             if not r.was_validation_successful:
                 validation_errors.append(
-                    f"validation not successful: {r.verify_string} (trust store {r.trust_store.name})"
+                    f"Validation not successful: {r.openssl_error_string} (trust store {r.trust_store.name})"
                 )
 
-        if result.path_validation_error_list:
+        # TODO check how to implement this with sslyze 3.1.0
+        """
+        if certificate0.path_validation_error_list:
             validation_errors = (
-                fail.error_message for fail in result.path_validation_error_list
+                fail.error_message for fail in certificate0.path_validation_error_list
             )
             validation_errors.append(
                 f'Validation failed: {", ".join(validation_errors)}'
             )
+        """
 
-        if not result.leaf_certificate_subject_matches_hostname:
+        if not certificate_obj.leaf_certificate_subject_matches_hostname:
             validation_errors.append(
                 f"Leaf certificate subject does not match hostname!"
             )
 
-        if not result.received_chain_has_valid_order:
+        if not certificate_obj.received_chain_has_valid_order:
             validation_errors.append(f"Certificate chain has wrong order.")
 
-        if result.verified_chain_has_sha1_signature:
+        if certificate_obj.verified_chain_has_sha1_signature:
             validation_errors.append(f"SHA1 signature found in chain.")
 
-        if result.verified_chain_has_legacy_symantec_anchor:
+        if certificate_obj.verified_chain_has_legacy_symantec_anchor:
             validation_errors.append(f"Symantec legacy certificate found in chain.")
 
-        sct_count = result.leaf_certificate_signed_certificate_timestamps_count
-        if sct_count < 2 and certificate.not_valid_before >= self.SCT_REQUIRED_DATE:
+        sct_count = certificate_obj.leaf_certificate_signed_certificate_timestamps_count
+        if sct_count < 2 and certificate.not_valid_before >= self._SCT_REQUIRED_DATE:
             validation_errors.append(
                 f"Certificates issued on or after 2018-04-01 need certificate transparency, "
                 f"i.e., two signed SCTs in certificate. Leaf certificate only has {sct_count}."
@@ -460,18 +317,18 @@ class TLSProfiler:
             for error in validation_errors:
                 log.debug(f"  → {error}")
 
-        return validation_errors, profile_errors, cert_warnings, pub_key_type
+        return validation_errors
 
     def _check_vulnerabilities(self):
         errors = []
 
-        result = self._scan(HeartbleedScanCommand())  # type: HeartbleedScanResult
+        result = self._get_result(ScanCommand.HEARTBLEED)  # type: HeartbleedScanResult
 
         if result.is_vulnerable_to_heartbleed:
             errors.append(f"Server is vulnerable to Heartbleed attack")
 
-        result = self._scan(
-            OpenSslCcsInjectionScanCommand()
+        result = self._get_result(
+            ScanCommand.OPENSSL_CCS_INJECTION
         )  # type: OpenSslCcsInjectionScanResult
 
         if result.is_vulnerable_to_ccs_injection:
@@ -479,31 +336,12 @@ class TLSProfiler:
                 f"Server is vulnerable to OpenSSL CCS Injection (CVE-2014-0224)"
             )
 
-        result = self._scan(RobotScanCommand())  # type: RobotScanResult
+        result = self._get_result(ScanCommand.ROBOT)  # type: RobotScanResult
 
-        if result.robot_result_enum in [
+        if result.robot_result in [
             RobotScanResultEnum.VULNERABLE_WEAK_ORACLE,
             RobotScanResultEnum.VULNERABLE_STRONG_ORACLE,
         ]:
             errors.append(f"Server is vulnerable to ROBOT attack.")
-
-        return errors
-
-    def _check_hsts_age(self) -> List[str]:
-        result = self._scan(HttpHeadersScanCommand())  # type: HttpHeadersScanResult
-
-        errors = []
-
-        if result.strict_transport_security_header:
-            if (
-                result.strict_transport_security_header.max_age
-                < self.target_profile["hsts_min_age"]
-            ):
-                errors.append(
-                    f"wrong HSTS age (is {result.strict_transport_security_header.max_age}, "
-                    f"should be at least {self.target_profile['hsts_min_age']})"
-                )
-        else:
-            errors.append(f"HSTS header not set")
 
         return errors
