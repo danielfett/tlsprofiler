@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "tlsprofiler"
+version = "2.1"
+description = "This tool/library can be used to compare the configuration of a TLS server to the Mozilla TLS configuration recommendations."
+authors = ["Daniel Fett <mail@danielfett.de>"]
+license = "AGPL-3.0"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.6"
+nassl = ">=3.1.0,<4.0.0"
+sslyze = ">=3.1.0,<4.0.0"
+requests = "^2.31.0"
+cryptography = ">=2.8"
+tabulate = "^0.9.0"
+dataclasses = "^0.8"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+tlsprofiler = "tlsprofiler.cli:main"
