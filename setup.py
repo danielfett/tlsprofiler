@@ -19,14 +19,13 @@ setup(
     author='Daniel Fett',
     author_email='python@danielfett.de',
     packages=find_packages(exclude=['tests']),
-    python_requires='>=3.6',
+    python_requires='>=3.7',
     install_requires=[
         'nassl>=3.1.0,<4.0.0',
         'sslyze>=3.1.0,<4.0.0',
         'requests',
         'cryptography>=2.8',
         'tabulate',
-        'dataclasses',
     ],
     entry_points={
         "console_scripts": ["tlsprofiler=tlsprofiler.cli:main"]
