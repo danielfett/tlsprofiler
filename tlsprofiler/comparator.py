@@ -21,7 +21,7 @@ log = logging.getLogger("tlsprofiler")
 
 
 class Comparator:
-    PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.6.json"
+    PROFILES_URL = "https://ssl-config.mozilla.org/guidelines/5.7.json"
     PROFILES = None
 
     def __init__(
